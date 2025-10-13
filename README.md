@@ -25,4 +25,4 @@ Major module: Multiple players (1)
 
 
 ## next 
--- profile player (single mode) : google authentication / profile page ( profil photo + statistique + level bar )/ adversaire : Ai ( choose level)
+-- profile player (single mode) : google authentication / profile page ( profil photo + statistique  )/ adversaire : Ai ( choose level)   ( similar to guest mode -> single player (the game algo is ready) )
