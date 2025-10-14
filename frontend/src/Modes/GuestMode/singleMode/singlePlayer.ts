@@ -16,8 +16,7 @@ export function renderOpponentSettingsPage() {
   }
 
   // ----------------- Random AI Alias -----------------
-  const aiAlias = ['player' , 'CyberBot', 'NeuroPaddle', 'ByteCrusher', 'CodeBreaker', 'PingLord', 'AlgoAce'];
- 
+  const aiAlias = ['player' , 'CyberBot', 'NeuroPaddle', 'ByteCrusher', 'CodeBreaker', 'PingLord', 'AlgoAce']; // TODO: Maybe add more?
 
   // ----------------- Render HTML -----------------
   app.innerHTML = `
@@ -114,7 +113,7 @@ export function renderOpponentSettingsPage() {
 
   // ⚙️ Settings
   settingsBtn.onclick = () => {
-    const username = localStorage.getItem('username') || 'guest';
+    const username = localStorage.getItem('username') || 'guest'; // TODO: get actual user name.
     openGameSettingsModal(username);
   };
 

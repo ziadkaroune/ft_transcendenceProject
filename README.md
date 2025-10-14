@@ -18,11 +18,8 @@
 ## need more work:
 Major module: Multiple players (1)
 
-
-
 ## total
  - (7.5) > mondatory part == 7
-
 
 ## next 
 -- profile player (single mode) : google authentication / profile page ( profil photo + statistique  )/ adversaire : Ai ( choose level)   ( similar to guest mode -> single player (the game algo is ready) )

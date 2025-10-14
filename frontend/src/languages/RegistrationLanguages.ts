@@ -71,7 +71,7 @@ const Rgtranslations = {
     wins: "Wygrane",
     matchHistory: "Historia meczów",
     match: "Mecz",
-    vs: "kontra",
+    vs: "vs",
     winner: "Zwycięzca",
     noMatches: "Brak rozegranych meczów.",
     enterAliasAlert: "Wpisz alias.",

@@ -177,7 +177,7 @@ export async function renderGamePage( mode : string , queueOverride?: string[], 
         }
          /////////////////////////////////////////////////////// queue algo singleMode
       else if("singleplayer" == mode)  {
-                      const humanPlayer = queue[0]; // always the main player
+                      const humanPlayer = queue[0]; // always the main player // TODO: human_player here from authentication
                       const opponents = queue.slice(1); // all AI bots
 
                       // Find which opponent was just played (p1 or p2 is one of the AIs)
