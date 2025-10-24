@@ -201,9 +201,14 @@ export async function renderDashboardPage() {
     const newUsername = usernameInput.value.trim();
     const newEmail = emailInput.value.trim().toLowerCase();
 
-    if (newDisplayName && newDisplayName !== user.display_name) payload.display_name = newDisplayName;
-    if (newUsername && newUsername !== user.username) payload.username = newUsername;
-    if (newEmail && newEmail !== (user.email || '').toLowerCase()) payload.email = newEmail;
+    // Compare against current values, treating undefined/null as empty string
+    const currentDisplayName = user.display_name || user.username || '';
+    const currentUsername = user.username || '';
+    const currentEmail = (user.email || '').toLowerCase();
+
+    if (newDisplayName && newDisplayName !== currentDisplayName) payload.display_name = newDisplayName;
+    if (newUsername && newUsername !== currentUsername) payload.username = newUsername;
+    if (newEmail && newEmail !== currentEmail) payload.email = newEmail;
 
     if (!Object.keys(payload).length) {
       showAccountStatus('info', t('noChanges'));
