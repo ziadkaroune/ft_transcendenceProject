@@ -11,6 +11,9 @@ export function renderLandingPage() {
   const app = document.getElementById('app');
   if (!app) return;
 
+  const isLoggedIn = localStorage.getItem('user') !== null;
+  const username = localStorage.getItem('username') || '';
+
   app.innerHTML = `
   <div class="relative min-h-screen w-screen bg-black overflow-hidden flex flex-col">
     
@@ -29,12 +32,25 @@ export function renderLandingPage() {
         PONGFR<span class="text-cyan-400">EE</span>
       </span>
 
-      <select id="languageSelect" class="text-sm bg-purple-900 text-white px-3 py-2 rounded-md border border-purple-600 focus:outline-none">
-        <option value="eng" ${currentLang === 'eng' ? 'selected' : ''}>English</option>
-        <option value="fr" ${currentLang === 'fr' ? 'selected' : ''}>Français</option>
-        <option value="pl" ${currentLang === 'pl' ? 'selected' : ''}>Polski</option>
-        <option value="es" ${currentLang === 'es' ? 'selected' : ''}>Español</option>
-      </select>
+      <div class="flex gap-4 items-center">
+        <select id="languageSelect" class="text-sm bg-purple-900 text-white px-3 py-2 rounded-md border border-purple-600 focus:outline-none">
+          <option value="eng" ${currentLang === 'eng' ? 'selected' : ''}>English</option>
+          <option value="fr" ${currentLang === 'fr' ? 'selected' : ''}>Français</option>
+          <option value="pl" ${currentLang === 'pl' ? 'selected' : ''}>Polski</option>
+          <option value="es" ${currentLang === 'es' ? 'selected' : ''}>Español</option>
+        </select>
+        ${isLoggedIn ? `
+          <button onclick="location.href='/dashboard'" 
+                  class="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg transition">
+            👤 ${username}
+          </button>
+        ` : `
+          <button onclick="location.href='/login'" 
+                  class="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg transition">
+            🔐 Login
+          </button>
+        `}
+      </div>
     </header>
 
     <!-- Main Section -->
@@ -53,8 +69,8 @@ export function renderLandingPage() {
             ▶ ${t('startgameGuest')}
           </button>
           <button id="start" 
-            class="px-6 py-3 bg-gradient-to-r from-pink-500 to-purple-600 text-white text-lg font-semibold rounded-lg 
-                   hover:from-purple-500 hover:to-cyan-500 shadow-lg transition-all duration-300">
+            class="px-6 py-3 bg-gradient-to-r from-cyan-500 to-blue-600 text-white text-lg font-semibold rounded-lg 
+                   hover:from-blue-500 hover:to-purple-500 shadow-lg transition-all duration-300">
             ▶ ${t('startGameProfile')}
           </button>
         </div>
@@ -87,7 +103,12 @@ export function renderLandingPage() {
   });
 
   document.getElementById('start')?.addEventListener('click', () => {
-    history.pushState({}, '', '/register');
+    const isLoggedIn = localStorage.getItem('user') !== null;
+    if (isLoggedIn) {
+      history.pushState({}, '', '/profile-game');
+    } else {
+      history.pushState({}, '', '/login');
+    }
     window.dispatchEvent(new PopStateEvent('popstate'));
   });
 }

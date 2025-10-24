@@ -10,6 +10,19 @@ const PORT = process.env.PORT || 3102;
 
 // Player service URL (service name in Docker Compose)
 const PLAYER_SERVICE_URL = "http://players-service:3101/players";
+const SYSTEM_PLAYERS = new Set([
+  'player',
+  'CyberBot',
+  'NeuroPaddle',
+  'ByteCrusher',
+  'CodeBreaker',
+  'PingLord',
+  'AlgoAce'
+]);
+
+function shouldSkipValidation(participants, userId) {
+  return Boolean(userId) || participants.some(name => SYSTEM_PLAYERS.has(name));
+}
 
 // Database path
 const dbPath = '/app/database/matches.db';
@@ -24,6 +37,7 @@ db.exec(`
     player1 TEXT NOT NULL,
     player2 TEXT NOT NULL,
     winner TEXT NOT NULL,
+    user_id INTEGER,
     played_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `);
@@ -41,22 +55,56 @@ fastify.get('/matches', async () => {
 });
 
 fastify.post('/matches', async (request, reply) => {
-  const { player1, player2, winner } = request.body;
+  const { player1, player2, winner, user_id } = request.body;
   if (!player1 || !player2 || !winner)
     return reply.code(400).send({ error: 'Missing players or winner' });
 
+  const participants = [player1, player2, winner];
+  const skipValidation = shouldSkipValidation(participants, user_id);
+
   try {
-    const valid = await validatePlayers(player1, player2, winner);
-    if (!valid) return reply.code(400).send({ error: 'Invalid player(s)' });
+    if (!skipValidation) {
+      const valid = await validatePlayers(player1, player2, winner);
+      if (!valid) return reply.code(400).send({ error: 'Invalid player(s)' });
+    }
 
     db.prepare(
-      'INSERT INTO matches (player1, player2, winner) VALUES (?, ?, ?)'
-    ).run(player1, player2, winner);
+      'INSERT INTO matches (player1, player2, winner, user_id) VALUES (?, ?, ?, ?)'
+    ).run(player1, player2, winner, user_id || null);
 
     reply.code(201).send({ message: 'Match recorded' });
   } catch (err) {
     fastify.log.error(err);
-    reply.code(500).send({ error: 'Failed to record match' });
+    return reply.code(503).send({ error: 'Player validation failed' });
+  }
+});
+
+// Get matches for specific user
+fastify.get('/matches/user/:userId', async (request, reply) => {
+  const { userId } = request.params;
+  
+  try {
+    const matches = db.prepare(
+      'SELECT * FROM matches WHERE user_id = ? ORDER BY played_at DESC'
+    ).all(userId);
+    
+    fastify.log.info(`Fetched ${matches.length} matches for user ${userId}`);
+    reply.send(matches);
+  } catch (err) {
+    fastify.log.error(err);
+    reply.code(500).send({ error: 'Failed to fetch user matches' });
+  }
+});
+
+fastify.delete('/matches/user/:userId', async (request, reply) => {
+  const { userId } = request.params;
+
+  try {
+    const result = db.prepare('DELETE FROM matches WHERE user_id = ?').run(userId);
+    reply.send({ message: 'User matches deleted', deleted: result.changes });
+  } catch (err) {
+    fastify.log.error(err);
+    reply.code(500).send({ error: 'Failed to delete user matches' });
   }
 });
 
@@ -65,12 +113,21 @@ fastify.delete('/matches', async () => {
   return { message: 'All matches deleted' };
 });
 
+// Health check
+fastify.get('/health', async (_, reply) => {
+  reply.send({ 
+    status: 'ok', 
+    service: 'matches', 
+    port: PORT 
+  });
+});
+
 // Start server
 const start = async () => {
   try {
     await fastify.register(cors, {
       origin: true,
-      methods: ['GET', 'POST', 'DELETE', 'PUT', 'OPTIONS'],
+      methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH', 'OPTIONS']
     });
 
     await fastify.listen({ port: PORT, host: '0.0.0.0' });

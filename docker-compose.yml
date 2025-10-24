@@ -15,6 +15,7 @@ services:
     depends_on:
         - players-service
         - matches-service
+        - users-service
     networks:
       - transcendence-network
 
@@ -44,6 +45,20 @@ services:
       - ./microservices/matches/src:/app/src
     depends_on:
       - players-service
+    restart: unless-stopped
+    networks:
+      - transcendence-network
+
+  users-service:
+    container_name: users-microservice
+    build:
+      context: ./microservices/users
+      dockerfile: Dockerfile
+    ports:
+      - "3103:3103"
+    volumes:
+      - ./database:/app/database
+      - ./microservices/users/src:/app/src
     restart: unless-stopped
     networks:
       - transcendence-network

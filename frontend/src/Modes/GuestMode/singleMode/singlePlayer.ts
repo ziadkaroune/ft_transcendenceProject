@@ -15,8 +15,8 @@ export function renderOpponentSettingsPage() {
     return Rgtranslations[lang]?.[key] || Rgtranslations['eng'][key];
   }
 
-  // ----------------- Random AI Alias -----------------
-  const aiAlias = ['player' , 'CyberBot', 'NeuroPaddle', 'ByteCrusher', 'CodeBreaker', 'PingLord', 'AlgoAce']; // TODO: Maybe add more?
+  // ----------------- AI Alias (same as profile mode) -----------------
+  const aiAlias = ['CyberBot', 'NeuroPaddle', 'ByteCrusher', 'CodeBreaker', 'PingLord', 'AlgoAce'];
 
   // ----------------- Render HTML -----------------
   app.innerHTML = `
@@ -105,8 +105,8 @@ export function renderOpponentSettingsPage() {
     localStorage.setItem('opponent_settings', JSON.stringify(opponentSettings));
     localStorage.setItem('mode', mode);
 
-
-    const queue = aiAlias;
+    // Human player is always 'player' in guest mode, followed by all AI opponents
+    const queue = ['player', ...aiAlias];
 
     renderGamePage(mode, queue);
   };

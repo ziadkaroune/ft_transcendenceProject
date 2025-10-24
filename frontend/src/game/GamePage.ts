@@ -1,4 +1,5 @@
 import { startGame } from './GameAlgo';
+import ProfileTranslations from '../languages/ProfileLanguages';
 
 /** Types */
 type GameSettings = {
@@ -10,7 +11,7 @@ type GameSettings = {
 
 /** Fetch players from backend */
 async function getAliasQueue(): Promise<string[]> {
-  const res = await fetch('http://localhost:3100/players');
+  const res = await fetch('http://localhost:3101/players');
   const data = await res.json();
 
   const queue = Array.isArray(data)
@@ -31,14 +32,55 @@ async function getAliasQueue(): Promise<string[]> {
 
 /** Save match result */
 async function saveMatch(winner: string, p1: string, p2: string) {
+  const isAuthenticatedPlay = localStorage.getItem('authenticated_play') === 'true';
+  const userStr = localStorage.getItem('user');
+  const user = userStr ? JSON.parse(userStr) : null;
+  
+  const matchData: any = {
+    winner,
+    player1: p1,
+    player2: p2
+  };
+  
+  // Add user_id if authenticated
+  if (isAuthenticatedPlay && user) {
+    matchData.user_id = user.id;
+    console.log('Saving match with user_id:', user.id);
+  }
+  
+  console.log('Match data being saved:', matchData);
+  
   const res = await fetch('http://localhost:3102/matches', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ winner, player1: p1, player2: p2 }),
+    body: JSON.stringify(matchData),
   });
 
   if (!res.ok) {
     console.error('Failed to save match', await res.text());
+    return;
+  }
+
+  console.log('Match saved successfully');
+
+  // If authenticated play, update user stats
+  if (isAuthenticatedPlay && user) {
+    const won = winner === user.username;
+    
+    console.log('Updating stats for user:', user.id, 'won:', won);
+    
+    // Update user stats
+    const statsRes = await fetch(`http://localhost:3103/users/${user.id}/stats`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ won, experience_gained: won ? 50 : 20 })
+    });
+    
+    if (!statsRes.ok) {
+      console.error('Failed to update stats:', await statsRes.text());
+    } else {
+      console.log('Stats updated successfully');
+    }
   }
 }
 
@@ -79,10 +121,18 @@ export async function renderGamePage( mode : string , queueOverride?: string[], 
   const app = document.getElementById('app');
   if (!app) return;
 
-  // Load queueu (if  it's defined in the parameters (single mode) , default (multiMode) (getAliasQueue() : from backend))
   const queue = queueOverride ?? (await getAliasQueue());
   const playerScores: Record<string, number> = scores ?? {};
 
+  const isAuthenticatedPlay = localStorage.getItem('authenticated_play') === 'true';
+  const userStr = localStorage.getItem('user');
+  const user = userStr ? JSON.parse(userStr) : null;
+  
+  // Translation helper
+  const currentLang = localStorage.getItem('lang') || 'eng';
+  function t(key: keyof typeof ProfileTranslations['eng']): string {
+    return ProfileTranslations[currentLang as keyof typeof ProfileTranslations]?.[key] || ProfileTranslations['eng'][key];
+  }
 
   //// multiMode
   if (queue.length < 2 && "multiMode" == mode ) {
@@ -91,36 +141,56 @@ export async function renderGamePage( mode : string , queueOverride?: string[], 
     const finalWinner = topPlayer ? topPlayer[0] : winner;
     app.innerHTML = `
       <div class="flex flex-col justify-center items-center h-screen text-white bg-gradient-to-br from-black via-purple-900 to-blue-900">
-        <h1 class="text-5xl font-extrabold mb-6 text-cyan-400 drop-shadow-lg animate-pulse">🏁 Tournament Finished!</h1>
-        <h2 class="text-3xl text-purple-300 mb-4">Champion: <span class="text-white">${finalWinner}</span></h2>
+        <h1 class="text-5xl font-extrabold mb-6 text-cyan-400 drop-shadow-lg animate-pulse">${t('tournamentFinished')}</h1>
+        <h2 class="text-3xl text-purple-300 mb-4">${t('champion')}: <span class="text-white">${finalWinner}</span></h2>
         ${
           topPlayer
-            ? `<p class="text-lg text-gray-300 mb-6">Total Wins: <span class="text-cyan-300 font-semibold">${topPlayer[1]}</span></p>`
+            ? `<p class="text-lg text-gray-300 mb-6">${t('totalWins')}: <span class="text-cyan-300 font-semibold">${topPlayer[1]}</span></p>`
             : ''
         }
         <button onclick="location.href='/multimode'" 
           class="px-8 py-3 bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl text-white text-lg font-bold 
           hover:from-cyan-500 hover:to-blue-500 transition-all duration-300 shadow-xl hover:shadow-cyan-500/50">
-          ⬅ Back to Home
+          ${t('backToHome')}
         </button>
       </div>
     `;
     return;
   }
-    //// single mode
-  else if(queue.length < 2 && "multiMode" != mode){
-      app.innerHTML = `
+  //// single mode or profile mode - game complete
+  else if(queue.length < 2 && ("multiMode" != mode)){
+    const winner = queue[0] || 'No one';
+    
+    app.innerHTML = `
       <div class="flex flex-col justify-center items-center h-screen text-white bg-gradient-to-br from-black via-purple-900 to-blue-900">
-          "zabi"
+        <h1 class="text-5xl font-extrabold mb-6 text-cyan-400 drop-shadow-lg animate-pulse">${t('gameComplete')}</h1>
+        <h2 class="text-3xl text-purple-300 mb-4">${t('winner')}: <span class="text-white">${winner}</span></h2>
+        ${user && isAuthenticatedPlay ? `
+          <p class="text-lg text-gray-300 mb-6">${t('statsUpdated')}</p>
+          <div class="bg-white/10 backdrop-blur-xl border border-white/20 rounded-xl p-6 mb-6">
+            <p class="text-sm text-gray-300">${t('matchesPlayed')}: <span class="text-cyan-400 font-bold">${Object.values(playerScores).reduce((a, b) => a + b, 0) || 1}</span></p>
+            <p class="text-sm text-gray-300">${t('wins')}: <span class="text-green-400 font-bold">${playerScores[winner] || 0}</span></p>
+          </div>
+        ` : ''}
+        <button onclick="location.href='${user && isAuthenticatedPlay ? '/dashboard' : '/guestmode'}'" 
+          class="px-8 py-3 bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl text-white text-lg font-bold 
+          hover:from-cyan-500 hover:to-blue-500 transition-all duration-300 shadow-xl hover:shadow-cyan-500/50">
+          ${user && isAuthenticatedPlay ? t('backToDashboard') : t('backToHome')}
+        </button>
       </div>
     `;
+    
+    // Clear authenticated play flag
+    localStorage.removeItem('authenticated_play');
     return;
   }
 
   const [p1, p2] = queue;
   const settings = getGameSettings(mode);
 
-  const next = (mode == "multiMode") && "▶ Next Match" || "new match";
+  // Determine button text based on mode
+  const nextButtonText = mode === "multiMode" ? t('nextMatch') : t('nextOpponent');
+
   app.innerHTML = `
     <div class="relative h-screen w-screen bg-gradient-to-br from-[#0a0020] via-[#030014] to-[#000000] overflow-hidden flex flex-col justify-center items-center">
       <!-- Animated glowing beams -->
@@ -140,12 +210,12 @@ export async function renderGamePage( mode : string , queueOverride?: string[], 
         <button id="nextMatch" 
           class="hidden px-8 py-3 bg-gradient-to-r from-cyan-600 to-blue-600 rounded-xl text-white text-lg font-semibold 
           shadow-lg hover:shadow-cyan-500/40 hover:scale-105 transition-all duration-300">
-          ${next}
+          ${nextButtonText}
         </button>
-        <button onclick="location.href='/guestmode'"
+        <button onclick="location.href='${user && isAuthenticatedPlay ? '/dashboard' : '/guestmode'}'"
           class="px-8 py-3 bg-gradient-to-r from-gray-700 to-gray-800 rounded-xl text-white text-lg font-semibold 
           shadow-lg hover:shadow-red-500/30 hover:scale-105 transition-all duration-300">
-          ✖ Exit
+          ${t('exit')}
         </button>
       </div>
     </div>
@@ -158,7 +228,7 @@ export async function renderGamePage( mode : string , queueOverride?: string[], 
     // Track wins
     playerScores[winner] = (playerScores[winner] || 0) + 1;
 
-    showMessage(winner, 'wins! Click Next Match to continue.');
+    showMessage(winner, t('winsMessage'));
 
     const nextMatchBtn = document.getElementById('nextMatch');
     if (nextMatchBtn) {
@@ -167,39 +237,37 @@ export async function renderGamePage( mode : string , queueOverride?: string[], 
       nextMatchBtn.onclick = () => {
         /////////////////////////////////////////////////////// queue algo multiMode
         if("multiMode" == mode){
-                // Eliminate loser and keep the winner
-                const newQueue = queue.filter(
-                  (player) => player === winner || (player !== p1 && player !== p2)
-                );
-                // Move winner to the front
-                const updatedQueue = [winner, ...newQueue.filter((p) => p !== winner)];
-                renderGamePage(mode , updatedQueue, playerScores);
+          // Eliminate loser and keep the winner
+          const newQueue = queue.filter(
+            (player) => player === winner || (player !== p1 && player !== p2)
+          );
+          // Move winner to the front
+          const updatedQueue = [winner, ...newQueue.filter((p) => p !== winner)];
+          renderGamePage(mode , updatedQueue, playerScores);
         }
-         /////////////////////////////////////////////////////// queue algo singleMode
-      else if("singleplayer" == mode)  {
-                      const humanPlayer = queue[0]; // always the main player // TODO: human_player here from authentication
-                      const opponents = queue.slice(1); // all AI bots
+        /////////////////////////////////////////////////////// queue algo singleMode and profile-singleplayer
+        else if("singleplayer" == mode || "profile-singleplayer" == mode)  {
+          const humanPlayer = queue[0]; // always the main player (user or 'player')
+          const opponents = queue.slice(1); // all AI bots
 
-                      // Find which opponent was just played (p1 or p2 is one of the AIs)
-                      const currentOpponentIndex = opponents.findIndex((p) => p === p1 || p === p2);
+          // Find which opponent was just played
+          const currentOpponentIndex = opponents.findIndex((p) => p === p1 || p === p2);
 
-                      // Calculate the next opponent in sequence
-                      const nextIndex =
-                        currentOpponentIndex >= 0
-                          ? (currentOpponentIndex + 1) % opponents.length
-                          : 0; // default to first if not found
+          // Calculate the next opponent in sequence (cycle through all)
+          const nextIndex =
+            currentOpponentIndex >= 0
+              ? (currentOpponentIndex + 1) % opponents.length
+              : 0;
 
-                      const nextOpponent = opponents[nextIndex];
+          const nextOpponent = opponents[nextIndex];
 
-                      // Build new queue: player always first, next AI second
-                      const updatedQueue = [humanPlayer, nextOpponent];
+          // Build new queue: player always first, next AI second
+          const updatedQueue = [humanPlayer, nextOpponent];
 
-                      console.log(`Next opponent: ${nextOpponent}`);
+          console.log(`Next opponent: ${nextOpponent}`);
 
-                      renderGamePage(mode, updatedQueue, playerScores);
-}
-
-        
+          renderGamePage(mode, updatedQueue, playerScores);
+        }
       };
     }
   }, settings, p1, p2);
