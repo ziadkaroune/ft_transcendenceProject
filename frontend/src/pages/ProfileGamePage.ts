@@ -1,7 +1,5 @@
 import ProfileTranslations from '../languages/ProfileLanguages';
 
-const API_URL = 'http://localhost:3103';
-
 // Same AI alias pool as guest mode
 const aiAliases = ['CyberBot', 'NeuroPaddle', 'ByteCrusher', 'CodeBreaker', 'PingLord', 'AlgoAce'];
 

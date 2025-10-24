@@ -8,8 +8,9 @@ COPY package*.json ./
 # Install dependencies
 RUN npm install
 
-# Copy source code
+# Copy source code and assets
 COPY index.js ./
+COPY assets ./assets/
 
 # Create directory for database
 RUN mkdir -p /app/database/

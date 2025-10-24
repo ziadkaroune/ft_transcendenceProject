@@ -6,10 +6,13 @@ import path from 'path';
 import fs from 'fs';
 import multipart from '@fastify/multipart';
 import { pipeline } from 'stream/promises';
+import { fileURLToPath } from 'url';
 
 const fastify = Fastify({ logger: true });
 const PORT = process.env.PORT || 3103;
 const MATCHES_SERVICE_URL = process.env.MATCHES_SERVICE_URL || 'http://matches-service:3102';
+
+const nowIso = () => new Date().toISOString();
 
 // Initialize SQLite database
 const dbPath = '/app/database/users.db';
@@ -26,7 +29,42 @@ if (!fs.existsSync(avatarsDir)) {
   fs.mkdirSync(avatarsDir, { recursive: true });
 }
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const DEFAULT_AVATAR_FILE = 'user.png';
+const DEFAULT_AVATAR_URL = `/avatars/${DEFAULT_AVATAR_FILE}`;
+
+const ensureDefaultAvatar = () => {
+  const destination = path.join(avatarsDir, DEFAULT_AVATAR_FILE);
+  if (fs.existsSync(destination)) return;
+
+  const candidatePaths = [
+    path.resolve(__dirname, 'assets', DEFAULT_AVATAR_FILE),
+    path.resolve(process.cwd(), DEFAULT_AVATAR_FILE),
+    path.resolve(process.cwd(), 'public', DEFAULT_AVATAR_FILE),
+    path.resolve(process.cwd(), '..', 'frontend', 'public', 'avatars', DEFAULT_AVATAR_FILE),
+    path.resolve(process.cwd(), '..', '..', 'frontend', 'public', 'avatars', DEFAULT_AVATAR_FILE)
+  ];
+
+  const sourcePath = candidatePaths.find((candidate) => fs.existsSync(candidate));
+  if (!sourcePath) {
+    console.warn(`[users-service] Default avatar source not found for ${DEFAULT_AVATAR_FILE}`);
+    return;
+  }
+
+  try {
+    fs.copyFileSync(sourcePath, destination);
+    console.log(`[users-service] Copied default avatar from ${sourcePath}`);
+  } catch (err) {
+    console.error(`[users-service] Failed to copy default avatar:`, err);
+  }
+};
+
+ensureDefaultAvatar();
+
 const db = new Database(dbPath);
+const VALID_STATUSES = new Set(['online', 'offline', 'away']);
 
 // Create users table with all required fields
 db.exec(`
@@ -36,12 +74,35 @@ db.exec(`
     email TEXT UNIQUE NOT NULL,
     password_hash TEXT,
     display_name TEXT,
-    avatar_url TEXT DEFAULT '/avatars/default.png',
+    avatar_url TEXT DEFAULT '${DEFAULT_AVATAR_URL}',
     status TEXT DEFAULT 'offline',
+    last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `);
+
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN last_seen DATETIME`);
+} catch (error) {
+  if (!(error instanceof Error) || !/duplicate column name/i.test(error.message)) {
+    throw error;
+  }
+}
+
+db.prepare(`
+  UPDATE users
+  SET avatar_url = ?
+  WHERE avatar_url IS NULL
+     OR avatar_url = ''
+     OR avatar_url = '/avatars/default.png'
+`).run(DEFAULT_AVATAR_URL);
+
+db.prepare(`
+  UPDATE users
+  SET last_seen = COALESCE(last_seen, updated_at, created_at, ?)
+  WHERE last_seen IS NULL
+`).run(nowIso());
 
 // Create user stats table
 db.exec(`
@@ -76,6 +137,43 @@ await fastify.register(cors, {
   methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH', 'OPTIONS']
 });
 
+await fastify.register(multipart, {
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB limit to prevent oversized uploads
+  }
+});
+
+fastify.get('/avatars/:filename', async (request, reply) => {
+  try {
+    const { filename } = request.params;
+    const safeName = path.basename(filename);
+    const filePath = path.resolve(avatarsDir, safeName);
+
+    if (!filePath.startsWith(path.resolve(avatarsDir))) {
+      return reply.code(400).send({ error: 'Invalid file path' });
+    }
+
+    if (!fs.existsSync(filePath)) {
+      return reply.code(404).send({ error: 'Avatar not found' });
+    }
+
+    const stream = fs.createReadStream(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeTypes = {
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp'
+    };
+
+    reply.type(mimeTypes[ext] || 'application/octet-stream');
+    return reply.send(stream);
+  } catch (error) {
+    fastify.log.error(error);
+    reply.code(500).send({ error: 'Failed to load avatar' });
+  }
+});
 
 // Health check
 fastify.get('/health', async (_, reply) => {
@@ -90,7 +188,7 @@ fastify.get('/health', async (_, reply) => {
 fastify.get('/users', async (_, reply) => {
   try {
     const users = db.prepare(`
-      SELECT id, username, display_name, avatar_url, status, created_at
+      SELECT id, username, display_name, avatar_url, status, last_seen, created_at
       FROM users ORDER BY username ASC
     `).all();
     reply.send(users);
@@ -105,7 +203,7 @@ fastify.get('/users/:id', async (request, reply) => {
   const { id } = request.params;
   try {
     const user = db.prepare(`
-      SELECT u.id, u.username, u.display_name, u.avatar_url, u.status,
+      SELECT u.id, u.username, u.display_name, u.avatar_url, u.status, u.last_seen,
              u.created_at,
              COALESCE(s.wins, 0) AS wins,
              COALESCE(s.losses, 0) AS losses,
@@ -154,9 +252,9 @@ fastify.post('/users', async (request, reply) => {
   try {
     const password_hash = password ? await bcrypt.hash(password, 10) : null;
     const result = db.prepare(`
-      INSERT INTO users (username, email, password_hash, display_name)
-      VALUES (?, ?, ?, ?)
-    `).run(normalizedUsername, normalizedEmail, password_hash, displayName);
+      INSERT INTO users (username, email, password_hash, display_name, avatar_url, last_seen)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(normalizedUsername, normalizedEmail, password_hash, displayName, DEFAULT_AVATAR_URL, nowIso());
     
     // Initialize stats for new user
     db.prepare(`
@@ -237,8 +335,14 @@ fastify.patch('/users/:id', async (request, reply) => {
     }
 
     if (status !== undefined) {
+      const normalizedStatus = typeof status === 'string' ? status.trim().toLowerCase() : '';
+      if (!VALID_STATUSES.has(normalizedStatus)) {
+        return reply.code(400).send({ error: 'Invalid status value' });
+      }
       updates.push('status = ?');
-      values.push(status);
+      values.push(normalizedStatus);
+      updates.push('last_seen = ?');
+      values.push(nowIso());
     }
 
     if (updates.length === 0) {
@@ -256,6 +360,83 @@ fastify.patch('/users/:id', async (request, reply) => {
   } catch (error) {
     fastify.log.error(error);
     reply.code(500).send({ error: 'Failed to update user' });
+  }
+});
+
+// Update user presence status
+fastify.post('/users/:id/status', async (request, reply) => {
+  const { id } = request.params;
+  const { status } = request.body ?? {};
+
+  const normalizedStatus = typeof status === 'string' ? status.trim().toLowerCase() : 'online';
+  if (!VALID_STATUSES.has(normalizedStatus)) {
+    return reply.code(400).send({ error: 'Invalid status value' });
+  }
+
+  try {
+    const user = db.prepare('SELECT id FROM users WHERE id = ?').get(id);
+    if (!user) {
+      return reply.code(404).send({ error: 'User not found' });
+    }
+
+    db.prepare(`
+      UPDATE users
+      SET status = ?, last_seen = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(normalizedStatus, nowIso(), id);
+
+    const updated = db.prepare('SELECT status, last_seen FROM users WHERE id = ?').get(id);
+    reply.send(updated);
+  } catch (error) {
+    fastify.log.error(error);
+    reply.code(500).send({ error: 'Failed to update status' });
+  }
+});
+
+// Update user password
+fastify.patch('/users/:id/password', async (request, reply) => {
+  const { id } = request.params;
+  const { current_password, new_password } = request.body ?? {};
+
+  if (!new_password || typeof new_password !== 'string' || new_password.length < 8) {
+    return reply.code(400).send({ error: 'New password must be at least 8 characters long' });
+  }
+
+  try {
+    const user = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(id);
+    if (!user) {
+      return reply.code(404).send({ error: 'User not found' });
+    }
+
+    if (!user.password_hash) {
+      return reply.code(400).send({ error: 'Password change not supported for this account' });
+    }
+
+    if (!current_password || typeof current_password !== 'string') {
+      return reply.code(400).send({ error: 'Current password required' });
+    }
+
+    const validPassword = await bcrypt.compare(current_password, user.password_hash);
+    if (!validPassword) {
+      return reply.code(401).send({ error: 'Current password is incorrect' });
+    }
+
+    const samePassword = await bcrypt.compare(new_password, user.password_hash);
+    if (samePassword) {
+      return reply.code(400).send({ error: 'New password must be different' });
+    }
+
+    const newHash = await bcrypt.hash(new_password, 10);
+    db.prepare(`
+      UPDATE users
+      SET password_hash = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(newHash, id);
+
+    reply.send({ message: 'Password updated successfully' });
+  } catch (error) {
+    fastify.log.error(error);
+    reply.code(500).send({ error: 'Failed to update password' });
   }
 });
 
@@ -298,22 +479,235 @@ fastify.patch('/users/:id/stats', async (request, reply) => {
   }
 });
 
-// Get user's friends
+// Get user's friends and requests
 fastify.get('/users/:id/friends', async (request, reply) => {
   const { id } = request.params;
   
   try {
     const friends = db.prepare(`
-      SELECT u.id, u.username, u.display_name, u.avatar_url, u.status, f.status as friendship_status
+      SELECT 
+        u.id,
+        u.username,
+        u.display_name,
+        u.avatar_url,
+        u.status,
+        u.last_seen,
+        f.status as friendship_status,
+        f.created_at
       FROM friends f
       JOIN users u ON f.friend_id = u.id
-      WHERE f.user_id = ? AND f.status = 'accepted'
+      WHERE f.user_id = ?
+      ORDER BY 
+        CASE f.status
+          WHEN 'pending' THEN 0
+          WHEN 'requested' THEN 1
+          WHEN 'accepted' THEN 2
+          ELSE 3
+        END,
+        u.username ASC
     `).all(id);
     
     reply.send(friends);
   } catch (error) {
     fastify.log.error(error);
     reply.code(500).send({ error: 'Database error' });
+  }
+});
+
+// Send or auto-accept friend requests
+fastify.post('/users/:id/friends', async (request, reply) => {
+  const { id } = request.params;
+  const { friend_id, friend_username } = request.body ?? {};
+
+  try {
+    const requesterId = Number(id);
+    if (Number.isNaN(requesterId)) {
+      return reply.code(400).send({ error: 'Invalid user id' });
+    }
+
+    let target;
+    if (friend_id !== undefined) {
+      const targetId = Number(friend_id);
+      if (Number.isNaN(targetId)) {
+        return reply.code(400).send({ error: 'Invalid friend id' });
+      }
+      target = db.prepare(`
+        SELECT id, username, display_name FROM users WHERE id = ?
+      `).get(targetId);
+    } else if (friend_username) {
+      target = db.prepare(`
+        SELECT id, username, display_name FROM users WHERE LOWER(username) = LOWER(?)
+      `).get(friend_username.trim());
+    } else {
+      return reply.code(400).send({ error: 'Friend identifier required' });
+    }
+
+    if (!target) {
+      return reply.code(404).send({ error: 'User not found' });
+    }
+
+    if (target.id === requesterId) {
+      return reply.code(400).send({ error: 'Cannot add yourself as a friend' });
+    }
+
+    const existing = db.prepare(`
+      SELECT status FROM friends WHERE user_id = ? AND friend_id = ?
+    `).get(requesterId, target.id);
+
+    if (existing?.status === 'accepted') {
+      return reply.code(409).send({ error: 'Already friends' });
+    }
+
+    if (existing?.status === 'requested') {
+      return reply.code(409).send({ error: 'Friend request already sent' });
+    }
+
+    if (existing?.status === 'pending') {
+      db.prepare(`
+        UPDATE friends
+        SET status = 'accepted', created_at = CURRENT_TIMESTAMP
+        WHERE (user_id = ? AND friend_id = ?)
+           OR (user_id = ? AND friend_id = ?)
+      `).run(requesterId, target.id, target.id, requesterId);
+      return reply.send({ message: 'Friend request accepted automatically' });
+    }
+
+    const reverse = db.prepare(`
+      SELECT status FROM friends WHERE user_id = ? AND friend_id = ?
+    `).get(target.id, requesterId);
+
+    if (reverse?.status === 'accepted') {
+      return reply.code(409).send({ error: 'Already friends' });
+    }
+
+    if (reverse?.status === 'requested') {
+      db.prepare(`
+        UPDATE friends
+        SET status = 'accepted', created_at = CURRENT_TIMESTAMP
+        WHERE (user_id = ? AND friend_id = ?)
+           OR (user_id = ? AND friend_id = ?)
+      `).run(requesterId, target.id, target.id, requesterId);
+      return reply.send({ message: 'Friend request accepted automatically' });
+    }
+
+    if (reverse?.status === 'pending') {
+      db.prepare(`
+        UPDATE friends
+        SET status = 'accepted', created_at = CURRENT_TIMESTAMP
+        WHERE (user_id = ? AND friend_id = ?)
+           OR (user_id = ? AND friend_id = ?)
+      `).run(requesterId, target.id, target.id, requesterId);
+      return reply.send({ message: 'Friend request accepted automatically' });
+    }
+
+    const insertStmt = db.prepare(`
+      INSERT INTO friends (user_id, friend_id, status) VALUES (?, ?, ?)
+    `);
+
+    const insert = db.transaction(() => {
+      insertStmt.run(requesterId, target.id, 'requested');
+      insertStmt.run(target.id, requesterId, 'pending');
+    });
+
+    insert();
+
+    reply.code(201).send({ message: 'Friend request sent', targetId: target.id });
+  } catch (error) {
+    if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+      return reply.code(409).send({ error: 'Friend relationship already exists' });
+    }
+    fastify.log.error(error);
+    reply.code(500).send({ error: 'Failed to send friend request' });
+  }
+});
+
+// Accept or reject friend requests
+fastify.patch('/users/:id/friends/:friendId', async (request, reply) => {
+  const { id, friendId } = request.params;
+  const { action } = request.body ?? {};
+
+  if (!['accept', 'reject'].includes(action)) {
+    return reply.code(400).send({ error: 'Invalid action' });
+  }
+
+  const userId = Number(id);
+  const targetId = Number(friendId);
+  if (Number.isNaN(userId) || Number.isNaN(targetId)) {
+    return reply.code(400).send({ error: 'Invalid identifier' });
+  }
+
+  try {
+    const relation = db.prepare(`
+      SELECT status FROM friends WHERE user_id = ? AND friend_id = ?
+    `).get(userId, targetId);
+
+    if (!relation) {
+      return reply.code(404).send({ error: 'Friend request not found' });
+    }
+
+    if (relation.status !== 'pending') {
+      return reply.code(409).send({ error: 'No incoming friend request to respond to' });
+    }
+
+    if (action === 'accept') {
+      db.prepare(`
+        UPDATE friends
+        SET status = 'accepted', created_at = CURRENT_TIMESTAMP
+        WHERE (user_id = ? AND friend_id = ?)
+           OR (user_id = ? AND friend_id = ?)
+      `).run(userId, targetId, targetId, userId);
+
+      return reply.send({ message: 'Friend request accepted' });
+    }
+
+    db.prepare(`
+      DELETE FROM friends
+      WHERE (user_id = ? AND friend_id = ?)
+         OR (user_id = ? AND friend_id = ?)
+    `).run(userId, targetId, targetId, userId);
+
+    reply.send({ message: 'Friend request declined' });
+  } catch (error) {
+    fastify.log.error(error);
+    reply.code(500).send({ error: 'Failed to update friend request' });
+  }
+});
+
+// Remove friend or cancel request
+fastify.delete('/users/:id/friends/:friendId', async (request, reply) => {
+  const { id, friendId } = request.params;
+
+  const userId = Number(id);
+  const targetId = Number(friendId);
+  if (Number.isNaN(userId) || Number.isNaN(targetId)) {
+    return reply.code(400).send({ error: 'Invalid identifier' });
+  }
+
+  try {
+    const relation = db.prepare(`
+      SELECT status FROM friends WHERE user_id = ? AND friend_id = ?
+    `).get(userId, targetId);
+
+    if (!relation) {
+      return reply.code(404).send({ error: 'Friend relationship not found' });
+    }
+
+    db.prepare(`
+      DELETE FROM friends
+      WHERE (user_id = ? AND friend_id = ?)
+         OR (user_id = ? AND friend_id = ?)
+    `).run(userId, targetId, targetId, userId);
+
+    const message = relation.status === 'accepted'
+      ? 'Friend removed'
+      : relation.status === 'requested'
+        ? 'Friend request cancelled'
+        : 'Friend request cleared';
+
+    reply.send({ message });
+  } catch (error) {
+    fastify.log.error(error);
+    reply.code(500).send({ error: 'Failed to remove friend' });
   }
 });
 
@@ -372,7 +766,11 @@ fastify.post('/auth/login', async (request, reply) => {
     }
     
     // Update user status to online
-    db.prepare('UPDATE users SET status = ? WHERE id = ?').run('online', user.id);
+    db.prepare(`
+      UPDATE users
+      SET status = ?, last_seen = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run('online', nowIso(), user.id);
     
     reply.send({
       id: user.id,
@@ -391,7 +789,11 @@ fastify.post('/auth/login', async (request, reply) => {
 fastify.post('/auth/logout/:id', async (request, reply) => {
   const { id } = request.params;
   try {
-    db.prepare('UPDATE users SET status = ? WHERE id = ?').run('offline', id);
+    db.prepare(`
+      UPDATE users
+      SET status = ?, last_seen = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run('offline', nowIso(), id);
     reply.send({ message: 'Logged out' });
   } catch (error) {
     fastify.log.error(error);
