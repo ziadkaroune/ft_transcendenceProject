@@ -1,20 +1,22 @@
 {
-  "name": "matches",
+  "name": "matches-service",
   "version": "1.0.0",
   "type": "module",
-  "description": "matches microservice for ft_transcendence",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "node --watch index.js"
+    "dev": "node --watch index.js",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:watch": "npm test -- --watch",
+    "test:coverage": "npm test -- --coverage"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
     "@fastify/cors": "^11.1.0",
+    "axios": "^1.7.9",
     "better-sqlite3": "^12.2.0",
-    "fastify": "^5.4.0",
-    "axios": "^1.6.0"
+    "fastify": "^5.4.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
   }
 }

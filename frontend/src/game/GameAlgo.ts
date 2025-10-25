@@ -14,9 +14,12 @@ export function startGame(
   if (!canvas) return;
 
   // Load mode and AI settings
-  const opponentSettings = JSON.parse(localStorage.getItem('playmode') || '{}');    //opponentSettings
-  const mode = (localStorage.getItem('mode') || 'multi');
+  const opponentSettings = JSON.parse(localStorage.getItem('opponent_settings') || '{}');
+  const mode = localStorage.getItem('mode') || 'multi';
   const aiLevel = opponentSettings.aiLevel || 'medium';
+
+  // Check if this is an AI match (either singleplayer or profile-singleplayer)
+  const isAIMatch = mode === 'singleplayer' || mode === 'profile-singleplayer';
 
   // --- Configure AI difficulty (used for error & aggressiveness) ---
   // These values influence prediction noise, chance to miss and hold time scaling.
@@ -203,11 +206,8 @@ export function startGame(
    */
   let aiTimer: number | null = null;
   function startAIController() {
-    // Only start AI controller in singleplayer mode (AI controls right paddle)
-    if (mode !== 'singleplayer') return;
-
-    // ensure arrow keys will be handled even in singleplayer
-    // (existing handlers will read synthetic events)
+    // Start AI controller for both singleplayer and profile-singleplayer modes
+    if (!isAIMatch) return;
 
     aiTimer = window.setInterval(() => {
       if (gameOver) return;
@@ -238,8 +238,6 @@ export function startGame(
       const keyToPress = delta > 0 ? 'ArrowUp' : 'ArrowDown';
 
       // compute duration to press key so paddle moves roughly the required distance
-      // framesNeeded = distance / PADDLE_SPEED
-      // duration_ms = framesNeeded * (1000/60) ~= framesNeeded * 16.667
       const distance = Math.abs(delta);
       const framesNeeded = distance / Math.max(0.0001, PADDLE_SPEED);
       let durationMs = framesNeeded * (1000 / 60) * aiHoldScale;
@@ -346,8 +344,10 @@ export function startGame(
     // if both pressed, keep whichever is still true (handled above)
   });
 
-  // kick off AI controller if singleplayer
-  startAIController();
+  // kick off AI controller if this is an AI match
+  if (isAIMatch) {
+    startAIController();
+  }
 
   // Start
   updateScoreText();
