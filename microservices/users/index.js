@@ -90,6 +90,14 @@ try {
   }
 }
 
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN auth_type TEXT DEFAULT 'email'`);
+} catch (error) {
+  if (!(error instanceof Error) || !/duplicate column name/i.test(error.message)) {
+    throw error;
+  }
+}
+
 db.prepare(`
   UPDATE users
   SET avatar_url = ?
@@ -226,11 +234,12 @@ fastify.get('/users/:id', async (request, reply) => {
 
 // Create new user (registration)
 fastify.post('/users', async (request, reply) => {
-  const { username, email, password, display_name } = request.body;
+  const { username, email, password, display_name, authType } = request.body;
 
   const normalizedUsername = username?.trim();
   const normalizedEmail = email?.trim().toLowerCase();
   const requestedDisplayName = (display_name ?? normalizedUsername)?.trim();
+  const userAuthType = authType || 'email';
 
   if (!normalizedUsername || !normalizedEmail) {
     return reply.code(400).send({ error: 'Username and email required' });
@@ -252,9 +261,9 @@ fastify.post('/users', async (request, reply) => {
   try {
     const password_hash = password ? await bcrypt.hash(password, 10) : null;
     const result = db.prepare(`
-      INSERT INTO users (username, email, password_hash, display_name, avatar_url, last_seen)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(normalizedUsername, normalizedEmail, password_hash, displayName, DEFAULT_AVATAR_URL, nowIso());
+      INSERT INTO users (username, email, password_hash, display_name, avatar_url, last_seen, auth_type)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(normalizedUsername, normalizedEmail, password_hash, displayName, DEFAULT_AVATAR_URL, nowIso(), userAuthType);
     
     // Initialize stats for new user
     db.prepare(`
@@ -263,7 +272,13 @@ fastify.post('/users', async (request, reply) => {
     
     reply.code(201).send({ 
       message: 'User created',
-      userId: result.lastInsertRowid 
+      user: {
+        id: result.lastInsertRowid,
+        username: normalizedUsername,
+        email: normalizedEmail,
+        display_name: displayName,
+        auth_type: userAuthType
+      }
     });
   } catch (err) {
     if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
@@ -752,7 +767,7 @@ fastify.post('/auth/login', async (request, reply) => {
   
   try {
     const user = db.prepare(`
-      SELECT id, username, email, password_hash, display_name, avatar_url, status
+      SELECT id, username, email, password_hash, display_name, avatar_url, status, auth_type
       FROM users WHERE email = ?
     `).get(email);
     
@@ -772,12 +787,15 @@ fastify.post('/auth/login', async (request, reply) => {
       WHERE id = ?
     `).run('online', nowIso(), user.id);
     
+    // Return user info with 2FA requirement flag
     reply.send({
       id: user.id,
       username: user.username,
       email: user.email,
       display_name: user.display_name,
-      avatar_url: user.avatar_url
+      avatar_url: user.avatar_url,
+      requires2FA: true,
+      authType: user.auth_type || 'email'
     });
   } catch (error) {
     fastify.log.error(error);

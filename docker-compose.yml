@@ -16,6 +16,7 @@ services:
         - players-service
         - matches-service
         - users-service
+        - auth-service
     networks:
       - transcendence-network
 
@@ -62,6 +63,27 @@ services:
     restart: unless-stopped
     networks:
       - transcendence-network
+  
+  auth-service:
+    container_name: auth-microservice
+    build:
+      context: ./microservices/auth
+      dockerfile: Dockerfile
+    ports:
+      - "3105:3105"
+    volumes:
+      - ./database:/app/database
+      - ./microservices/auth/src:/app/src
+    restart: unless-stopped
+    networks:
+      - transcendence-network
+    environment:
+      - MAILEROO=${MAILEROO}
+      - MAILEROO_FROM=${MAILEROO_FROM}
+    dns:
+      - 1.1.1.1
+    env_file:
+      - ./.env
 
 networks:
   transcendence-network:
