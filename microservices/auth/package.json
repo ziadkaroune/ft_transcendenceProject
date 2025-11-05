@@ -1,0 +1,20 @@
+{
+  "name": "2fa-service",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "2FA microservice for ft_transcendence",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@fastify/cors": "^11.1.0",
+    "better-sqlite3": "^12.2.0",
+    "axios": "^1.7.2",
+    "fastify": "^5.4.0"
+  }
+}
