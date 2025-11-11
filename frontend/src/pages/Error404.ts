@@ -12,10 +12,10 @@ const defaultLang = 'eng';
 
   app.innerHTML = `
   <div class="relative flex flex-col items-center justify-center h-screen w-full overflow-hidden bg-gradient-to-br from-purple-900 via-black to-blue-900 text-white">
-    
+        <!-- Header -->
     <!-- Background Grid & Glow -->
-    <div class="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/asfalt-dark.png')] opacity-10"></div>
-    <div class="absolute top-0 left-0 w-full h-full bg-gradient-to-b from-purple-800/20 via-transparent to-blue-800/20 blur-3xl"></div>
+    <div class="fixed inset-0 bg-[url('https://www.transparenttextures.com/patterns/asfalt-dark.png')] opacity-10"></div>
+    <div class="fixed top-0 left-0 w-full h-full bg-gradient-to-b from-purple-800/20 via-transparent to-blue-800/20 blur-3xl"></div>
 
     <!-- Big 404 Text -->
     <h1 class="text-[120px] font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 via-pink-400 to-blue-400 drop-shadow-[0_0_30px_rgba(168,85,247,0.8)] animate-pulse z-10">

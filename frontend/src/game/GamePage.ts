@@ -32,6 +32,7 @@ async function getAliasQueue(): Promise<string[]> {
 
 /** Save match result */
 async function saveMatch(winner: string, p1: string, p2: string) {
+  const mode = localStorage.getItem("mode") ;
   const isAuthenticatedPlay = localStorage.getItem('authenticated_play') === 'true';
   const userStr = localStorage.getItem('user');
   const user = userStr ? JSON.parse(userStr) : null;
@@ -41,6 +42,22 @@ async function saveMatch(winner: string, p1: string, p2: string) {
     player1: p1,
     player2: p2
   };
+
+  if (mode === "multi") {
+  let matches = JSON.parse(localStorage.getItem("matches") || "[]");
+
+  // ✅ if matches is not an array (because of old data), reset it
+  if (!Array.isArray(matches)) {
+    matches = [];
+  }
+
+  // Add your new match
+  matches.push(matchData);
+
+  // Save back
+  localStorage.setItem("matches", JSON.stringify(matches));
+}
+  else{
   
   // Add user_id if authenticated
   if (isAuthenticatedPlay && user) {
@@ -81,7 +98,7 @@ async function saveMatch(winner: string, p1: string, p2: string) {
     } else {
       console.log('Stats updated successfully');
     }
-  }
+  }}
 }
 
 /** ---- LOCAL STORAGE HELPERS ---- */
@@ -96,7 +113,7 @@ function getGameSettings(mode: string): GameSettings {
   }
   return {
     mode: 'custom',
-    winScore: 4,
+    winScore: 6,
     ballSpeed: 0.8,
     paddleSpeed: 5,
   };
@@ -186,7 +203,11 @@ export async function renderGamePage( mode : string , queueOverride?: string[], 
   }
 
   const [p1, p2] = queue;
-  const settings = getGameSettings(mode);
+  let settings : GameSettings;
+  if(mode === "multiMode")
+     settings = getGameSettings("multi");
+  else
+      settings = getGameSettings(mode);
 
   // Determine button text based on mode
   const nextButtonText = mode === "multiMode" ? t('nextMatch') : t('nextOpponent');
@@ -212,7 +233,7 @@ export async function renderGamePage( mode : string , queueOverride?: string[], 
           shadow-lg hover:shadow-cyan-500/40 hover:scale-105 transition-all duration-300">
           ${nextButtonText}
         </button>
-        <button onclick="location.href='${user && isAuthenticatedPlay ? '/dashboard' : '/guestmode'}'"
+        <button onclick="location.href='${mode === "profile-singleplayer" ? '/dashboard' : '/guestmode'}'"
           class="px-8 py-3 bg-gradient-to-r from-gray-700 to-gray-800 rounded-xl text-white text-lg font-semibold 
           shadow-lg hover:shadow-red-500/30 hover:scale-105 transition-all duration-300">
           ${t('exit')}
@@ -246,28 +267,31 @@ export async function renderGamePage( mode : string , queueOverride?: string[], 
           renderGamePage(mode , updatedQueue, playerScores);
         }
         /////////////////////////////////////////////////////// queue algo singleMode and profile-singleplayer
-        else if("singleplayer" == mode || "profile-singleplayer" == mode)  {
-          const humanPlayer = queue[0]; // always the main player (user or 'player')
-          const opponents = queue.slice(1); // all AI bots
+       else if("singleplayer" == mode || "profile-singleplayer" == mode)  {
+                const humanPlayer = queue[0]; // always the main player
+                
+                //  Get full AI list from localStorage (persistent)
+                const opponentSettings = JSON.parse(localStorage.getItem('opponent_settings') || '{}');
+                const allAI = opponentSettings.aiName || [];
 
-          // Find which opponent was just played
-          const currentOpponentIndex = opponents.findIndex((p) => p === p1 || p === p2);
+                // Find which opponent was just played
+                const currentOpponentIndex = allAI.findIndex((ai: string) => ai === p2);
 
-          // Calculate the next opponent in sequence (cycle through all)
-          const nextIndex =
-            currentOpponentIndex >= 0
-              ? (currentOpponentIndex + 1) % opponents.length
-              : 0;
+                // Calculate the next opponent in sequence 
+                const nextIndex = currentOpponentIndex >= 0
+                  ? (currentOpponentIndex + 1) % allAI.length
+                  : 0;
 
-          const nextOpponent = opponents[nextIndex];
+                const nextOpponent = allAI[nextIndex];
 
-          // Build new queue: player always first, next AI second
-          const updatedQueue = [humanPlayer, nextOpponent];
+                //   queue: player + nextOpponent first ,second ,,.....
+                const updatedQueue = [humanPlayer, nextOpponent, ...allAI.filter((ai: string) => ai !== nextOpponent)];
 
-          console.log(`Next opponent: ${nextOpponent}`);
+                console.log(`Next opponent: ${nextOpponent}`);
 
-          renderGamePage(mode, updatedQueue, playerScores);
-        }
+                renderGamePage(mode, updatedQueue, playerScores);
+}
+        
       };
     }
   }, settings, p1, p2);

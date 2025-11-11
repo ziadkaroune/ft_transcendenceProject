@@ -1,10 +1,10 @@
 /** 🔧 Create and manage in-page Game Settings modal */
-export function openGameSettingsModal(username: string = 'guest') {
+export function openGameSettingsModal(mode: string) {
   // Prevent duplicate modals
   if (document.getElementById('game-settings-modal')) return;
 
   /** Load existing settings (if any) */
-  const saved = localStorage.getItem(`settings_${username}`);
+  const saved = localStorage.getItem(`settings_${mode}`);
   const currentSettings = saved
     ? JSON.parse(saved)
     : {
@@ -29,7 +29,7 @@ export function openGameSettingsModal(username: string = 'guest') {
         <div>
           <label class="block text-lg mb-2"> Win Score</label>
           <input type="number" id="winScore" value="${currentSettings.winScore}" min="1"
-            class="w-full p-2 rounded-lg text-white" />
+            class="w-full p-2 rounded-lg text-black" />
         </div>
 
         <div>
@@ -89,7 +89,7 @@ export function openGameSettingsModal(username: string = 'guest') {
       paddleSpeed: parseFloat((modal.querySelector('#paddleSpeed') as HTMLInputElement).value),
     };
 
-    localStorage.setItem(`settings_${username}`, JSON.stringify(settings));
+    localStorage.setItem(`settings_${mode}`, JSON.stringify(settings));
     closeModal();
   });
 

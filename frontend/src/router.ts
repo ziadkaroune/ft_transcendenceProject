@@ -22,10 +22,24 @@ function render(path: string) {
   const app = document.getElementById('app');
   if (!app) return;
 
+  const isloggedin = localStorage.getItem('user');
   if (path === '/login') {
-    renderLoginPage();
+    if(isloggedin){
+       history.pushState({}, '', '/dashboard');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+       renderDashboardPage(); 
+    }
+       
+    else  // return user to dashbord if he's already logged in
+      renderLoginPage();
   } else if (path === '/dashboard') {
-    renderDashboardPage();
+     if(!isloggedin){
+        history.pushState({}, '', '/login');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        renderLoginPage();
+    }
+    else
+       renderDashboardPage();
   } else if (path === '/profile-game') {
     renderProfileGamePage();
   } else if (path === '/guestmode') {
@@ -35,7 +49,13 @@ function render(path: string) {
   } else if (path === '/multimode') {
     renderRegistrationPage();
   } else if (path === '/singlemode') {
-    renderOpponentSettingsPage();
+      if(isloggedin){
+        history.pushState({}, '', '/dashboard');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        renderDashboardPage();
+    }
+    else 
+       renderOpponentSettingsPage();
   } else if (path === '/') {
     renderLandingPage();
   } else {

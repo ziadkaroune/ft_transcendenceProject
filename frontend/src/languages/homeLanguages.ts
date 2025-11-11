@@ -4,6 +4,7 @@ const HmTranslation = {
     subtitle: "Battle your opponent in this retro-futuristic 2-player arena.",
     startgameGuest: "Play as Guest",
     startGameProfile: "Play with Profile",
+    login : "login" ,
     controls: "Controls",
     language: "Language"
   },
@@ -13,6 +14,7 @@ const HmTranslation = {
     startgameGuest: "Jouer en invité",
     startGameProfile: "Jouer avec profil",
     controls: "Contrôles",
+     login : "se connecter" ,
     language: "Langue"
   },
   pl: {

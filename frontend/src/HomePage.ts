@@ -47,7 +47,7 @@ export function renderLandingPage() {
         ` : `
           <button onclick="location.href='/login'" 
                   class="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg transition">
-            🔐 Login
+            🔐   ${t('login')}
           </button>
         `}
       </div>

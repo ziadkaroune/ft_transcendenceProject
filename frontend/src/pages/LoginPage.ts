@@ -301,6 +301,8 @@ export function renderLoginPage() {
         localStorage.setItem('user', JSON.stringify(verifiedUser));
         localStorage.setItem('userId', verifiedUser.id.toString());
         localStorage.setItem('username', verifiedUser.username);
+        localStorage.setItem('mode' , "profile-singleplayer");
+        localStorage.setItem('waazabi' , 'true');
         modal.remove();
         history.pushState({}, '', '/dashboard');
         window.dispatchEvent(new PopStateEvent('popstate'));
@@ -538,6 +540,7 @@ export function renderLoginPage() {
           localStorage.setItem('user', JSON.stringify(user));
           localStorage.setItem('userId', String(userId));
           localStorage.setItem('username', user.username || user.display_name || '');
+              localStorage.setItem('lhawa' , 'true');
           history.pushState({}, '', '/dashboard');
           window.dispatchEvent(new PopStateEvent('popstate'));
           return;
@@ -576,6 +579,7 @@ export function renderLoginPage() {
       localStorage.setItem('user', JSON.stringify(user));
       localStorage.setItem('userId', String(userId));
       localStorage.setItem('username', user.username || user.display_name || '');
+          localStorage.setItem('l9lawi' , 'true');
       history.pushState({}, '', '/dashboard');
       window.dispatchEvent(new PopStateEvent('popstate'));
     } catch (err) {

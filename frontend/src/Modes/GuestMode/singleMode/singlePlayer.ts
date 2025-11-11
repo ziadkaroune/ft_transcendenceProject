@@ -17,8 +17,10 @@ export function renderOpponentSettingsPage() {
 
   // ----------------- AI Alias (same as profile mode) -----------------
   const aiAlias = ['CyberBot', 'NeuroPaddle', 'ByteCrusher', 'CodeBreaker', 'PingLord', 'AlgoAce'];
-
+  localStorage.setItem('mode', "singleplayer");
   // ----------------- Render HTML -----------------
+  const mode = localStorage.getItem("mode") ;
+  if(mode != "profile-singleplayer"){
   app.innerHTML = `
     <div class="relative flex items-center justify-center min-h-screen w-full overflow-hidden 
                 bg-gradient-to-br from-black via-[#090024] to-[#0a0040] text-white px-4 sm:px-8">
@@ -88,7 +90,10 @@ export function renderOpponentSettingsPage() {
       </button>
     </div>
   `;
-
+  }
+  else{
+    app.innerHTML="waaaaaaa zabi";
+  }
   // ----------------- Event Listeners -----------------
   const startBtn = document.getElementById('startMatchBtn') as HTMLButtonElement;
   const cancelBtn = document.getElementById('cancelBtn') as HTMLButtonElement;
@@ -96,11 +101,11 @@ export function renderOpponentSettingsPage() {
   const homeBtn = document.getElementById('homeBtn') as HTMLButtonElement;
   const difficultySelect = document.getElementById('difficulty') as HTMLSelectElement;
 
-  // 🎮 Start Game
+  //  Start Game
   startBtn.onclick = () => {
     const difficulty = difficultySelect.value;
     const opponentSettings = { aiLevel: difficulty, aiName: aiAlias };
-    const mode = "singleplayer";
+    const mode  = "singleplayer";
 
     localStorage.setItem('opponent_settings', JSON.stringify(opponentSettings));
     localStorage.setItem('mode', mode);
@@ -113,8 +118,7 @@ export function renderOpponentSettingsPage() {
 
   // ⚙️ Settings
   settingsBtn.onclick = () => {
-    const username = localStorage.getItem('username') || 'guest'; // TODO: get actual user name.
-    openGameSettingsModal(username);
+    openGameSettingsModal("singleplayer");
   };
 
   // ✖ Cancel
