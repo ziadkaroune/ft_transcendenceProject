@@ -97,14 +97,16 @@ export async function renderProfileGamePage() {
   const homeBtn = document.getElementById('homeBtn') as HTMLButtonElement;
   const settingsBtn = document.getElementById('settingsbtn') as HTMLButtonElement;
   const difficultySelect = document.getElementById('difficulty') as HTMLSelectElement;
-
+  
+  const mode = "profile-singleplayer";
+     localStorage.setItem('mode', mode);
   startBtn.onclick = async () => {
     const difficulty = difficultySelect.value;
     const opponentSettings = { aiLevel: difficulty, aiName: aiAliases };
-    const mode = "profile-singleplayer";
+  
 
     localStorage.setItem('opponent_settings', JSON.stringify(opponentSettings));
-    localStorage.setItem('mode', mode);
+ 
     localStorage.setItem('authenticated_play', 'true');
     
     console.log('Starting authenticated game for user:', user.username);
@@ -116,7 +118,7 @@ export async function renderProfileGamePage() {
 
   settingsBtn.onclick = async () => {
     const { openGameSettingsModal } = await import('../game/Gmaesettings');
-    openGameSettingsModal(user.username);
+    openGameSettingsModal(mode);
   };
 
   cancelBtn.onclick = () => {

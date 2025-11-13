@@ -26,7 +26,8 @@ const escapeHtml = (value: string | number | null | undefined): string => {
 export async function renderDashboardPage() {
   const app = document.getElementById('app');
   if (!app) return;
-
+  let isLogIn : boolean = true;
+  localStorage.setItem('isLogIn' , 'true');
   const userStr = localStorage.getItem('user');
   if (!userStr) {
     history.pushState({}, '', '/login');
@@ -56,7 +57,11 @@ export async function renderDashboardPage() {
   };
 
   const updateLocalUser = () => {
-    localStorage.setItem('user', JSON.stringify(user));
+    if(isLogIn){
+       localStorage.setItem('user', JSON.stringify(user));
+      console.error("zahia");
+    }
+   
   };
 
   if (!user.avatar_url) {
@@ -829,14 +834,17 @@ export async function renderDashboardPage() {
       }
 
       showAccountStatus('success', t('deleteSuccess'));
-      setTimeout(() => {
+     
         localStorage.removeItem('user');
         localStorage.removeItem('userId');
         localStorage.removeItem('username');
         localStorage.removeItem('authenticated_play');
+        localStorage.setItem('mode' , 'default' );
+        isLogIn = false; /// to check if use loggout
+       localStorage.setItem('isLogIn' , 'false'); // for global use
         history.pushState({}, '', '/');
         window.dispatchEvent(new PopStateEvent('popstate'));
-      }, 1200);
+    
     } catch (error) {
       showAccountStatus('error', (error as Error).message);
       deleteAccountBtn?.removeAttribute('disabled');
@@ -1249,6 +1257,9 @@ export async function renderDashboardPage() {
     localStorage.removeItem('user');
     localStorage.removeItem('userId');
     localStorage.removeItem('username');
+    localStorage.setItem('mode' , 'default' );
+    isLogIn = false; /// to check if use loggout
+    localStorage.setItem('isLogIn' , 'false'); // for global use
     history.pushState({}, '', '/');
     window.dispatchEvent(new PopStateEvent('popstate'));
   });

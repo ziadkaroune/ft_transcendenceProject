@@ -43,11 +43,25 @@ export function GuestPage() {
   </div>
   `;
 
-  // ✅ Route logic
+  //  Route logic
+  const isLogIn = localStorage.getItem('isLogIn');
+   if(isLogIn === "true"){
+        document.getElementById('singleMode')?.classList.add('select-none');
+         document.getElementById('singleMode')?.classList.add('hidden');
+   }
+   else{
+      document.getElementById('singleMode')?.classList.add('opacity-1');
+       document.getElementById('singleMode')?.classList.add('block');
+   }
+
+ 
   document.getElementById('singleMode')?.addEventListener('click', () => {
-    sessionStorage.setItem('canAccessGame', 'true');
-    history.pushState({}, '', '/singlemode');
-    window.dispatchEvent(new PopStateEvent('popstate'));
+    if(isLogIn === "false" || !isLogIn){
+      sessionStorage.setItem('canAccessGame', 'true');
+      history.pushState({}, '', '/singlemode');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }
+    
   });
 
   document.getElementById('multiMode')?.addEventListener('click', () => {
@@ -56,7 +70,7 @@ export function GuestPage() {
     window.dispatchEvent(new PopStateEvent('popstate'));
   });
 
-  // ✅ Home button logic
+  //  Home button logic
   document.getElementById('homeButton')?.addEventListener('click', () => {
     history.pushState({}, '', '/');
     window.dispatchEvent(new PopStateEvent('popstate'));
