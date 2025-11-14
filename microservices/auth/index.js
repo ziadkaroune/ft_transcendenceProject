@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import rateLimit from '@fastify/rate-limit';
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
@@ -76,6 +77,14 @@ const PORT = process.env.PORT || 3105;
 
 const JWT_SECRET = process.env.JWT_SECRET || 'development-secret';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
+const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX || 120);
+const RATE_LIMIT_TIME_WINDOW = process.env.RATE_LIMIT_TIME_WINDOW || '1 minute';
+const SENSITIVE_RATE_LIMIT_MAX = Number(process.env.SENSITIVE_RATE_LIMIT_MAX || 10);
+const SENSITIVE_RATE_LIMIT_WINDOW = process.env.SENSITIVE_RATE_LIMIT_WINDOW || '1 minute';
+const RATE_LIMIT_ALLOW_LIST = (process.env.RATE_LIMIT_ALLOW_LIST || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
 
 function base64url(input) {
   return Buffer.from(input).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
@@ -123,10 +132,105 @@ try {
   fastify.log.warn('Could not open DB, continuing with in-memory token map', err);
 }
 
+let upsertTotpSecretStmt;
+let selectTotpSecretStmt;
+let deleteTotpSecretStmt;
+
+if (db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS totp_secrets (
+      user_id TEXT PRIMARY KEY,
+      secret TEXT NOT NULL,
+      auth_type TEXT DEFAULT 'authApp',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  upsertTotpSecretStmt = db.prepare(`
+    INSERT INTO totp_secrets (user_id, secret, auth_type)
+    VALUES (?, ?, ?)
+    ON CONFLICT(user_id)
+    DO UPDATE SET secret = excluded.secret,
+                  auth_type = excluded.auth_type,
+                  updated_at = CURRENT_TIMESTAMP
+  `);
+
+  selectTotpSecretStmt = db.prepare(`
+    SELECT secret, auth_type FROM totp_secrets WHERE user_id = ?
+  `);
+
+  deleteTotpSecretStmt = db.prepare(`
+    DELETE FROM totp_secrets WHERE user_id = ?
+  `);
+}
+
+function persistTotpSecret(userId, secret, authType = 'authApp') {
+  if (!upsertTotpSecretStmt) return false;
+  upsertTotpSecretStmt.run(String(userId), secret, authType);
+  return true;
+}
+
+function loadTotpSecret(userId) {
+  if (!selectTotpSecretStmt) return null;
+  return selectTotpSecretStmt.get(String(userId));
+}
+
+function removeTotpSecret(userId) {
+  if (!deleteTotpSecretStmt) return false;
+  deleteTotpSecretStmt.run(String(userId));
+  return true;
+}
+
+function hydrateAuthAppEntry(userId) {
+  const key = String(userId);
+  const existing = token_map.get(key);
+  if (existing && existing.type === 'authApp' && existing.secret) {
+    return existing;
+  }
+
+  const row = loadTotpSecret(key);
+  if (row && row.secret) {
+    const entry = { type: row.auth_type || 'authApp', secret: row.secret };
+    token_map.set(key, entry);
+    return entry;
+  }
+
+  return null;
+}
+
+function buildRateLimitRouteConfig(max = SENSITIVE_RATE_LIMIT_MAX, timeWindow = SENSITIVE_RATE_LIMIT_WINDOW) {
+  return {
+    config: {
+      rateLimit: {
+        max,
+        timeWindow
+      }
+    }
+  };
+}
+
 // Register CORS
 await fastify.register(cors, {
   origin: true,
   methods: ['GET', 'POST', 'DELETE', 'PUT', 'OPTIONS']
+});
+
+await fastify.register(rateLimit, {
+  global: true,
+  max: RATE_LIMIT_MAX,
+  timeWindow: RATE_LIMIT_TIME_WINDOW,
+  allowList: RATE_LIMIT_ALLOW_LIST,
+  skipOnError: true,
+  addHeaders: true,
+  addHeadersOnSuccess: true,
+  addHeadersOnExceeding: true,
+  errorResponseBuilder: (_request, context) => ({
+    statusCode: 429,
+    error: 'Too Many Requests',
+    message: 'Rate limit exceeded. Please wait before retrying.',
+    retryAfter: Math.ceil(context.ttl / 1000)
+  })
 });
 
 const token_map = new Map(); // userId -> { type: 'email'|'authApp', code?, secret?, validUntil?, failedAttempts?, lockoutUntil? }
@@ -212,7 +316,7 @@ function generateRandomToken(len = 48) {
 }
 
 // Endpoint: Initiate registration process
-fastify.post('/auth/2fa/register/initiate', async (request, reply) => {
+fastify.post('/auth/2fa/register/initiate', buildRateLimitRouteConfig(), async (request, reply) => {
   const { email, username, authType } = request.body || {};
   if (!email || !username || !authType) {
     return reply.status(400).send({ error: 'email, username, and authType are required' });
@@ -246,8 +350,8 @@ fastify.post('/auth/2fa/register/initiate', async (request, reply) => {
     const secret = generateBase32Secret(20);
     registration_tokens.set(verificationToken, { email, username, authType, secret, validUntil });
 
-    const label = `FTTranscendence:${username}`;
-    const issuer = 'FTTranscendence';
+    const label = `ft_transcendence:${username}`;
+    const issuer = 'ft_transcendence';
     const otpauth_url = `otpauth://totp/${encodeURIComponent(label)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
 
     fastify.log.info(`TOTP secret generated for pending registration of user ${username}`);
@@ -258,7 +362,7 @@ fastify.post('/auth/2fa/register/initiate', async (request, reply) => {
 });
 
 // Endpoint: Verify code for a pending registration
-fastify.post('/auth/2fa/register/verify', async (request, reply) => {
+fastify.post('/auth/2fa/register/verify', buildRateLimitRouteConfig(), async (request, reply) => {
   const { verificationToken, code } = request.body || {};
   if (!verificationToken || !code) {
     return reply.status(400).send({ error: 'verificationToken and code are required' });
@@ -277,6 +381,8 @@ fastify.post('/auth/2fa/register/verify', async (request, reply) => {
   if (entry.authType === 'email' && entry.code === String(code).trim()) {
     // For email, the code is one-time. We can now consider it verified.
     // The user service will consume this token.
+    entry.verified = true;
+    registration_tokens.set(verificationToken, entry);
     fastify.log.info(`Registration for ${entry.email} verified successfully.`);
     return reply.send({ verificationToken });
   }
@@ -284,8 +390,48 @@ fastify.post('/auth/2fa/register/verify', async (request, reply) => {
   return reply.status(400).send({ error: 'Invalid code' });
 });
 
+// Endpoint: finalize registration (persist 2FA preferences)
+fastify.post('/auth/2fa/register/complete', buildRateLimitRouteConfig(), async (request, reply) => {
+  const { verificationToken, userId } = request.body || {};
+  if (!verificationToken || !userId) {
+    return reply.status(400).send({ error: 'verificationToken and userId are required' });
+  }
+
+  const entry = registration_tokens.get(verificationToken);
+  if (!entry) {
+    return reply.status(400).send({ error: 'Invalid or expired verification token' });
+  }
+
+  if (Date.now() > entry.validUntil) {
+    registration_tokens.delete(verificationToken);
+    return reply.status(400).send({ error: 'Verification token expired' });
+  }
+
+  if (entry.authType === 'authApp') {
+    if (!entry.secret) {
+      return reply.status(400).send({ error: 'Missing authenticator secret for this token' });
+    }
+
+    persistTotpSecret(userId, entry.secret, 'authApp');
+    token_map.set(String(userId), { type: 'authApp', secret: entry.secret });
+    registration_tokens.delete(verificationToken);
+
+    return reply.send({ success: true, authType: 'authApp' });
+  }
+
+  if (entry.authType === 'email') {
+    if (!entry.verified) {
+      return reply.status(400).send({ error: 'Email verification has not been completed yet' });
+    }
+    registration_tokens.delete(verificationToken);
+    return reply.send({ success: true, authType: 'email' });
+  }
+
+  return reply.status(400).send({ error: 'Unsupported authentication type' });
+});
+
 // Endpoint: send email code to user (development: returns code when MAILEROO is missing)
-fastify.post('/auth/2fa/send', async (request, reply) => {
+fastify.post('/auth/2fa/send', buildRateLimitRouteConfig(), async (request, reply) => {
   const { userId, email } = request.body || {};
   if (!userId && !email) {
     return reply.status(400).send({ error: 'userId or email is required' });
@@ -341,7 +487,7 @@ fastify.post('/auth/2fa/send', async (request, reply) => {
 });
 
 // Endpoint: setup authenticator app for user (returns secret + otpauth_url)
-fastify.post('/auth/2fa/setup', async (request, reply) => {
+fastify.post('/auth/2fa/setup', buildRateLimitRouteConfig(), async (request, reply) => {
   const { userId, issuer } = request.body || {};
   if (!userId) {
     return reply.status(400).send({ error: 'userId is required' });
@@ -363,13 +509,17 @@ fastify.post('/auth/2fa/setup', async (request, reply) => {
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 
-fastify.post('/auth/2fa/verify', async (request, reply) => {
+fastify.post('/auth/2fa/verify', buildRateLimitRouteConfig(), async (request, reply) => {
   const { userId, code } = request.body || {};
   if (!userId || !code) {
     return reply.status(400).send({ error: 'userId and code are required' });
   }
 
-  const entry = token_map.get(String(userId));
+  const key = String(userId);
+  let entry = token_map.get(key);
+  if (!entry) {
+    entry = hydrateAuthAppEntry(key);
+  }
   if (!entry) {
     return reply.status(400).send({ error: 'No 2FA setup or code found for this user' });
   }
@@ -414,12 +564,12 @@ fastify.post('/auth/2fa/verify', async (request, reply) => {
     // Success: clean up and send response
     if (entry.type === 'email') {
       // on success, remove the stored code (one-time)
-      token_map.delete(String(userId));
+      token_map.delete(key);
     } else {
       // For authApp, just reset any failure tracking
       delete entry.failedAttempts;
       delete entry.lockoutUntil;
-      token_map.set(String(userId), entry);
+      token_map.set(key, entry);
     }
 
     // Return a demo "user" object — in production, fetch actual user from users service
@@ -436,7 +586,7 @@ fastify.post('/auth/2fa/verify', async (request, reply) => {
       fastify.log.warn(`User ${userId} locked out due to too many failed 2FA attempts.`);
     }
 
-    token_map.set(String(userId), entry);
+    token_map.set(key, entry);
 
     return reply.status(400).send({ error: 'Invalid code' });
   }
@@ -451,7 +601,13 @@ fastify.post('/auth/2fa/status', async (request, reply) => {
   }
 
   // Check in-memory map first (for authApp TOTP secrets)
-  const entry = token_map.get(String(userId));
+  const key = String(userId);
+  let entry = token_map.get(key);
+  if (entry && entry.type === 'authApp' && entry.secret) {
+    return reply.send({ requires2FA: true, type: 'authApp' });
+  }
+
+  entry = hydrateAuthAppEntry(key);
   if (entry && entry.type === 'authApp' && entry.secret) {
     return reply.send({ requires2FA: true, type: 'authApp' });
   }
