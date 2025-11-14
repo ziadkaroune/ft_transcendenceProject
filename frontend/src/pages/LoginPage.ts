@@ -233,6 +233,7 @@ export function renderLoginPage() {
         const res = await fetch(`${API_URL_2FA}/auth/2fa/send`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({ userId: user.id, email: user.email })
         });
         if (!res.ok) {
@@ -290,6 +291,7 @@ export function renderLoginPage() {
         const res = await fetch(`${API_URL_2FA}/auth/2fa/verify`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({ userId: user.id, code })
         });
         if (!res.ok) {
@@ -297,14 +299,15 @@ export function renderLoginPage() {
           throw new Error(err.error || 'Invalid code');
         }
         const data = await res.json();
-        if (!data.token) {
-          throw new Error('Missing authentication token.');
+        if (!(data && (data.success || data.sessionIssued || data.user))) {
+          throw new Error('Session could not be established.');
         }
-        localStorage.setItem('token', data.token);
-        const verifiedUser = data.user || data;
-        localStorage.setItem('user', JSON.stringify(verifiedUser));
-        localStorage.setItem('userId', verifiedUser.id.toString());
-        localStorage.setItem('username', verifiedUser.username);
+        const verifiedUser = data.user || user;
+        if (verifiedUser) {
+          localStorage.setItem('user', JSON.stringify(verifiedUser));
+          localStorage.setItem('userId', String(verifiedUser.id || user.id));
+          localStorage.setItem('username', verifiedUser.username || user.username || '');
+        }
         localStorage.setItem('mode' , "profile-singleplayer");
         localStorage.setItem('waazabi' , 'true');
         modal.remove();
@@ -405,6 +408,7 @@ export function renderLoginPage() {
         const res = await fetch(`${API_URL}/users`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          // Registration runs before a session exists, so we skip credentials to avoid CORS failures
           body: JSON.stringify({
             ...userData,
             ...finalVerificationData
@@ -468,7 +472,6 @@ export function renderLoginPage() {
       const regCodeInput = document.getElementById('regCodeInput') as HTMLInputElement;
       const verifyBtn = document.getElementById('verifyRegCodeBtn') as HTMLButtonElement;
       const resendBtn = document.getElementById('resendRegCodeBtn') as HTMLButtonElement;
-      const contentDiv = document.getElementById('emailVerificationContent') as HTMLDivElement;
 
       const sendCode = async () => {
         try {
@@ -477,6 +480,7 @@ export function renderLoginPage() {
           const res = await fetch(`${API_URL_2FA}/auth/2fa/register/initiate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
             body: JSON.stringify({ email: userData.email, authType: 'email' })
           });
           const data = await res.json().catch(() => ({}));
@@ -519,6 +523,7 @@ export function renderLoginPage() {
           const res = await fetch(`${API_URL_2FA}/auth/2fa/register/verify`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
             body: JSON.stringify({ verificationToken: verificationData.verificationToken, code })
           });
           if (!res.ok) {
@@ -567,9 +572,8 @@ export function renderLoginPage() {
         return;
       }
 
-      // If login is successful and returns a token directly (no 2FA)
-      if (data.token) {
-        localStorage.setItem('token', data.token);
+      // If login already established a session (no 2FA required)
+      if (data.sessionIssued || data.success || data.token) {
         localStorage.setItem('user', JSON.stringify(user));
         localStorage.setItem('userId', String(user.id));
         localStorage.setItem('username', user.username || '');
@@ -588,6 +592,7 @@ export function renderLoginPage() {
         const statusRes = await fetch(`${API_URL_2FA}/auth/2fa/status`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({ userId })
         });
 
@@ -618,11 +623,11 @@ export function renderLoginPage() {
         const sendRes = await fetch(`${API_URL_2FA}/auth/2fa/send`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({ userId })
         });
 
         if (sendRes.ok) {
-          const sendData = await sendRes.json().catch(() => ({}));
           // If the 2FA service accepted the send request, show the modal for email 2FA
           show2FAModal({ ...user, id: userId }, 'email');
           return;
@@ -662,6 +667,7 @@ export function renderLoginPage() {
       const initiateRes = await fetch(`${API_URL_2FA}/auth/2fa/register/initiate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           username,
           email,

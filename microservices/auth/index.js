@@ -6,6 +6,8 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { exec } from 'child_process';
+import axios from 'axios';
+import jwt from 'jsonwebtoken';
 
 export async function sendMailerooEmail(from, to, display_name, subject, html, plain_text) {
   const apiKey = process.env.MAILEROO;
@@ -75,8 +77,18 @@ export async function sendMailerooEmail(from, to, display_name, subject, html, p
 const fastify = Fastify({ logger: true });
 const PORT = process.env.PORT || 3105;
 
-const JWT_SECRET = process.env.JWT_SECRET || 'development-secret';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  throw new Error('JWT_SECRET must be defined and at least 32 characters long.');
+}
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
+const JWT_ISSUER = process.env.JWT_ISSUER || 'ft_transcendence.auth';
+const JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'ft_transcendence.clients';
+const JWT_COOKIE_NAME = process.env.JWT_COOKIE_NAME || 'ft_session';
+const JWT_COOKIE_DOMAIN = process.env.JWT_COOKIE_DOMAIN || undefined;
+const JWT_COOKIE_PATH = process.env.JWT_COOKIE_PATH || '/';
+const JWT_COOKIE_SAMESITE = process.env.JWT_COOKIE_SAMESITE || 'Strict';
+const COOKIE_SECURE = process.env.JWT_COOKIE_SECURE ? process.env.JWT_COOKIE_SECURE === 'true' : (process.env.NODE_ENV !== 'development');
 const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX || 120);
 const RATE_LIMIT_TIME_WINDOW = process.env.RATE_LIMIT_TIME_WINDOW || '1 minute';
 const SENSITIVE_RATE_LIMIT_MAX = Number(process.env.SENSITIVE_RATE_LIMIT_MAX || 10);
@@ -90,13 +102,13 @@ const SECRET_ENCRYPTION_ALGO = 'aes-256-gcm';
 const SECRET_IV_LENGTH = 12;
 const SECRET_TAG_LENGTH = 16;
 const SECRET_ENCRYPTION_KEY = (() => {
-  const rawKey = process.env.TOTP_SECRET_KEY || process.env.JWT_SECRET || 'development-secret';
+  const rawKey = process.env.TOTP_SECRET_KEY || JWT_SECRET;
   return crypto.createHash('sha256').update(String(rawKey)).digest();
 })();
 
-function base64url(input) {
-  return Buffer.from(input).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-}
+const PRIMARY_AUTH_SERVICE_URL = process.env.PRIMARY_AUTH_SERVICE_URL || 'http://localhost:3103';
+const PRIMARY_AUTH_VERIFY_PATH = process.env.PRIMARY_AUTH_VERIFY_PATH || '/users';
+const ALLOW_USER_VALIDATION_BYPASS = process.env.ALLOW_USER_VALIDATION_BYPASS === 'true';
 
 function parseExpiry(value) {
   if (typeof value === 'number') return value;
@@ -108,20 +120,82 @@ function parseExpiry(value) {
   return amount * multipliers[unit];
 }
 
-function createJWT(payload, expiresIn = '1h', secret = JWT_SECRET) {
-  const header = { alg: 'HS256', typ: 'JWT' };
-  const expSeconds = parseExpiry(expiresIn);
-  const fullPayload = { ...payload, exp: Math.floor(Date.now() / 1000) + expSeconds };
-  const headerPart = base64url(JSON.stringify(header));
-  const payloadPart = base64url(JSON.stringify(fullPayload));
-  const signature = crypto
-    .createHmac('sha256', secret)
-    .update(`${headerPart}.${payloadPart}`)
-    .digest('base64')
-    .replace(/=/g, '')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_');
-  return `${headerPart}.${payloadPart}.${signature}`;
+const JWT_MAX_AGE_SECONDS = parseExpiry(JWT_EXPIRES_IN);
+
+function issueSessionCookie(reply, payload) {
+  const token = jwt.sign(payload, JWT_SECRET, {
+    expiresIn: JWT_EXPIRES_IN,
+    issuer: JWT_ISSUER,
+    audience: JWT_AUDIENCE,
+    algorithm: 'HS256'
+  });
+
+  const parts = [
+    `${JWT_COOKIE_NAME}=${token}`,
+    'HttpOnly',
+    `Path=${JWT_COOKIE_PATH}`,
+    `SameSite=${JWT_COOKIE_SAMESITE}`,
+    `Max-Age=${JWT_MAX_AGE_SECONDS}`
+  ];
+
+  if (COOKIE_SECURE) {
+    parts.push('Secure');
+  }
+
+  if (JWT_COOKIE_DOMAIN) {
+    parts.push(`Domain=${JWT_COOKIE_DOMAIN}`);
+  }
+
+  reply.header('Set-Cookie', parts.join('; '));
+}
+
+async function fetchUserFromPrimaryAuth(userId) {
+  if (!PRIMARY_AUTH_SERVICE_URL || !PRIMARY_AUTH_VERIFY_PATH) {
+    return null;
+  }
+
+  const normalizedId = encodeURIComponent(String(userId).trim());
+  const normalizedPath = PRIMARY_AUTH_VERIFY_PATH.endsWith('/')
+    ? PRIMARY_AUTH_VERIFY_PATH.slice(0, -1)
+    : PRIMARY_AUTH_VERIFY_PATH;
+  const url = `${PRIMARY_AUTH_SERVICE_URL}${normalizedPath}/${normalizedId}`;
+
+  try {
+    const response = await axios.get(url, { timeout: 4000 });
+    if (response.status >= 200 && response.status < 300 && response.data) {
+      const user = response.data.user || response.data;
+      if (user && user.id) {
+        return user;
+      }
+    }
+    return null;
+  } catch (err) {
+    fastify.log.error({ err, userId }, 'Failed to validate user against primary auth service');
+    return null;
+  }
+}
+
+function sanitizeUserProfile(user, fallbackId) {
+  if (!user) {
+    return {
+      id: fallbackId,
+      username: `user${fallbackId}`
+    };
+  }
+
+  const {
+    password,
+    hashed_password,
+    totp_secret,
+    secret,
+    ...safeUser
+  } = user;
+
+  if (!safeUser.username && fallbackId) {
+    safeUser.username = `user${fallbackId}`;
+  }
+
+  return safeUser;
 }
 
 function encryptTotpSecret(plaintext) {
@@ -271,7 +345,8 @@ function buildRateLimitRouteConfig(max = SENSITIVE_RATE_LIMIT_MAX, timeWindow = 
 // Register CORS
 await fastify.register(cors, {
   origin: true,
-  methods: ['GET', 'POST', 'DELETE', 'PUT', 'OPTIONS']
+  methods: ['GET', 'POST', 'DELETE', 'PUT', 'OPTIONS'],
+  credentials: true
 });
 
 await fastify.register(rateLimit, {
@@ -630,10 +705,18 @@ fastify.post('/auth/2fa/verify', buildRateLimitRouteConfig(), async (request, re
       token_map.set(key, entry);
     }
 
-    // Return a demo "user" object — in production, fetch actual user from users service
-    const token = createJWT({ userId, authType: entry.type }, JWT_EXPIRES_IN, JWT_SECRET);
-    const demoUser = { id: userId, username: `user${userId}` };
-    return reply.send({ token, user: demoUser });
+    const verifiedUser = await fetchUserFromPrimaryAuth(userId);
+    if (!verifiedUser && !ALLOW_USER_VALIDATION_BYPASS) {
+      return reply.status(403).send({ error: 'Unable to verify user with primary auth service' });
+    }
+
+    const safeUser = sanitizeUserProfile(verifiedUser, userId);
+    issueSessionCookie(reply, {
+      sub: String(safeUser.id || userId),
+      authType: entry.type
+    });
+
+    return reply.send({ success: true, user: safeUser, sessionIssued: true });
   } else {
     // Failure: update attempt counter and potentially lock out
     entry.failedAttempts = (entry.failedAttempts || 0) + 1;
