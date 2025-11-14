@@ -85,6 +85,14 @@ const RATE_LIMIT_ALLOW_LIST = (process.env.RATE_LIMIT_ALLOW_LIST || '')
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean);
+const ENCRYPTED_SECRET_PREFIX = 'enc:';
+const SECRET_ENCRYPTION_ALGO = 'aes-256-gcm';
+const SECRET_IV_LENGTH = 12;
+const SECRET_TAG_LENGTH = 16;
+const SECRET_ENCRYPTION_KEY = (() => {
+  const rawKey = process.env.TOTP_SECRET_KEY || process.env.JWT_SECRET || 'development-secret';
+  return crypto.createHash('sha256').update(String(rawKey)).digest();
+})();
 
 function base64url(input) {
   return Buffer.from(input).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
@@ -114,6 +122,34 @@ function createJWT(payload, expiresIn = '1h', secret = JWT_SECRET) {
     .replace(/\+/g, '-')
     .replace(/\//g, '_');
   return `${headerPart}.${payloadPart}.${signature}`;
+}
+
+function encryptTotpSecret(plaintext) {
+  const iv = crypto.randomBytes(SECRET_IV_LENGTH);
+  const cipher = crypto.createCipheriv(SECRET_ENCRYPTION_ALGO, SECRET_ENCRYPTION_KEY, iv);
+  const encrypted = Buffer.concat([cipher.update(String(plaintext), 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return `${ENCRYPTED_SECRET_PREFIX}${Buffer.concat([iv, authTag, encrypted]).toString('base64')}`;
+}
+
+function decryptTotpSecret(storedValue) {
+  if (typeof storedValue !== 'string') {
+    throw new Error('Invalid stored secret value');
+  }
+  if (!storedValue.startsWith(ENCRYPTED_SECRET_PREFIX)) {
+    throw new Error('Secret is not encrypted');
+  }
+  const payload = Buffer.from(storedValue.slice(ENCRYPTED_SECRET_PREFIX.length), 'base64');
+  if (payload.length <= SECRET_IV_LENGTH + SECRET_TAG_LENGTH) {
+    throw new Error('Encrypted payload too short');
+  }
+  const iv = payload.subarray(0, SECRET_IV_LENGTH);
+  const authTag = payload.subarray(SECRET_IV_LENGTH, SECRET_IV_LENGTH + SECRET_TAG_LENGTH);
+  const ciphertext = payload.subarray(SECRET_IV_LENGTH + SECRET_TAG_LENGTH);
+  const decipher = crypto.createDecipheriv(SECRET_ENCRYPTION_ALGO, SECRET_ENCRYPTION_KEY, iv);
+  decipher.setAuthTag(authTag);
+  const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  return decrypted.toString('utf8');
 }
 
 // Initialize SQLite database (kept from original file)
@@ -167,13 +203,35 @@ if (db) {
 
 function persistTotpSecret(userId, secret, authType = 'authApp') {
   if (!upsertTotpSecretStmt) return false;
-  upsertTotpSecretStmt.run(String(userId), secret, authType);
+  const storedSecret = encryptTotpSecret(secret);
+  upsertTotpSecretStmt.run(String(userId), storedSecret, authType);
   return true;
 }
 
 function loadTotpSecret(userId) {
   if (!selectTotpSecretStmt) return null;
-  return selectTotpSecretStmt.get(String(userId));
+  const row = selectTotpSecretStmt.get(String(userId));
+  if (!row || !row.secret) {
+    return null;
+  }
+
+  const storedValue = row.secret;
+  const authType = row.auth_type || 'authApp';
+
+  if (typeof storedValue === 'string' && storedValue.startsWith(ENCRYPTED_SECRET_PREFIX)) {
+    try {
+      const plaintext = decryptTotpSecret(storedValue);
+      return { secret: plaintext, auth_type: authType };
+    } catch (err) {
+      fastify.log.error({ err, userId }, 'Failed to decrypt TOTP secret');
+      return null;
+    }
+  }
+
+  // Legacy plaintext secret detected — re-encrypt transparently
+  fastify.log.warn({ userId }, 'Detected plaintext TOTP secret; encrypting now');
+  persistTotpSecret(userId, storedValue, authType);
+  return { secret: storedValue, auth_type: authType };
 }
 
 function removeTotpSecret(userId) {
