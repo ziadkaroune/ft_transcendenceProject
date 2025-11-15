@@ -233,6 +233,7 @@ export function renderLoginPage() {
         const res = await fetch(`${API_URL_2FA}/auth/2fa/send`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({ userId: user.id, email: user.email })
         });
         if (!res.ok) {
@@ -290,17 +291,23 @@ export function renderLoginPage() {
         const res = await fetch(`${API_URL_2FA}/auth/2fa/verify`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({ userId: user.id, code })
         });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           throw new Error(err.error || 'Invalid code');
         }
-        const verifiedUser = await res.json();
-        // Save and navigate
-        localStorage.setItem('user', JSON.stringify(verifiedUser));
-        localStorage.setItem('userId', verifiedUser.id.toString());
-        localStorage.setItem('username', verifiedUser.username);
+        const data = await res.json();
+        if (!(data && (data.success || data.sessionIssued || data.user))) {
+          throw new Error('Session could not be established.');
+        }
+        const verifiedUser = data.user || user;
+        if (verifiedUser) {
+          localStorage.setItem('user', JSON.stringify(verifiedUser));
+          localStorage.setItem('userId', String(verifiedUser.id || user.id));
+          localStorage.setItem('username', verifiedUser.username || user.username || '');
+        }
         localStorage.setItem('mode' , "profile-singleplayer");
         localStorage.setItem('waazabi' , 'true');
         modal.remove();
@@ -315,12 +322,15 @@ export function renderLoginPage() {
   }
 
   // Helper: show registration code / setup modal (for email code or authApp secret)
-  function showRegistrationCodeModal(user: { id: any; email?: string }, code: string | null, authType: string, extra?: { otpauth_url?: string }) {
+  function showRegistrationCodeModal(
+    userData: { username: string, email: string, password?: string, authType: string },
+    verificationData: { verificationToken: string, secret?: string, otpauth_url?: string },
+  ) {
     // remove if exists
     const existing = document.getElementById('regCodeModal');
     if (existing) existing.remove();
 
-    const isAuthApp = authType === 'authApp' && extra?.otpauth_url;
+    const isAuthApp = userData.authType === 'authApp' && verificationData.otpauth_url;
 
     const modal = document.createElement('div');
     modal.id = 'regCodeModal';
@@ -331,20 +341,21 @@ export function renderLoginPage() {
           ${isAuthApp ? 'Set up Authenticator App' : 'Verify Your Email'}
         </h3>
         <p id="regModalMessage" class="text-sm text-cyan-200 mb-4">
-          ${isAuthApp ? 'Scan the image below with your authenticator app.' : 'To complete registration, please enter the code sent to your email.'}
+          ${isAuthApp ? 'Scan the image below with your authenticator app, then click "Complete Registration".' : 'To complete registration, please enter the code sent to your email.'}
         </p>
 
         ${isAuthApp ? `
           <!-- Auth App QR and Secret Display -->
-          <div class="mb-4 bg-white p-4 rounded-lg flex justify-center">
+          <div id="qrCanvasWrapper" class="mb-4 bg-white p-4 rounded-lg flex justify-center">
             <canvas id="qrCanvas"></canvas>
           </div>
-          <div class="mb-4">
+          <div id="totpSecretWrapper" class="mb-4">
             <label class="text-xs text-cyan-200 block mb-2">Or enter this secret key manually:</label>
             <div class="bg-black/50 border border-cyan-500/60 rounded-xl px-4 py-3 text-white break-words">
-              ${code || 'Error: No secret key provided.'}
+              ${verificationData.secret || 'Error: No secret key provided.'}
             </div>
           </div>
+          <div id="regCodeError" class="text-sm text-red-400 mb-2 min-h-[1.25rem]"></div>
         ` : `
           <!-- Email Verification Input -->
           <div id="emailVerificationContent">
@@ -361,10 +372,10 @@ export function renderLoginPage() {
 
         <div id="regModalButtons" class="flex gap-3 mt-4">
           ${isAuthApp ? `
-            <button id="proceedToLoginBtn" class="flex-1 py-2 bg-gradient-to-r from-purple-500 to-pink-600 rounded-xl font-bold">Proceed to Login</button>
-            <button id="dismissRegCodeBtn" class="flex-1 py-2 bg-gray-800/40 rounded-xl">Close</button>
+            <button id="completeRegBtn" class="flex-1 py-2 bg-gradient-to-r from-purple-500 to-pink-600 rounded-xl font-bold">Complete Registration</button>
+            <button id="dismissRegCodeBtn" class="flex-1 py-2 bg-gray-800/40 rounded-xl">Cancel</button>
           ` : `
-            <button id="verifyRegCodeBtn" class="flex-1 py-2 bg-gradient-to-r from-purple-500 to-pink-600 rounded-xl font-bold">Verify Email</button>
+            <button id="verifyRegCodeBtn" class="flex-1 py-2 bg-gradient-to-r from-purple-500 to-pink-600 rounded-xl font-bold">Verify & Register</button>
             <button id="dismissRegCodeBtn" class="flex-1 py-2 bg-gray-800/40 rounded-xl">Cancel</button>
           `}
         </div>
@@ -376,42 +387,48 @@ export function renderLoginPage() {
     const dismissBtn = document.getElementById('dismissRegCodeBtn') as HTMLButtonElement;
     dismissBtn.onclick = () => modal.remove();
 
-    if (isAuthApp) {
-      // --- Authenticator App Flow ---
-      const canvas = document.getElementById('qrCanvas') as HTMLCanvasElement;
-      if (canvas && extra.otpauth_url) {
-        QRCode.toCanvas(canvas, extra.otpauth_url, { width: 256, margin: 1 }, (error) => {
-          if (error) {
-            console.error('QR Code generation failed:', error);
-            canvas.parentElement!.innerHTML = `<p class="text-red-400">Could not generate QR code.</p>`;
-          }
+    const titleH3 = document.getElementById('regModalTitle') as HTMLHeadingElement;
+    const messageP = document.getElementById('regModalMessage') as HTMLParagraphElement;
+    const buttonsDiv = document.getElementById('regModalButtons') as HTMLDivElement;
+    const errorDivContainer = document.getElementById('regCodeError');
+    let errorDiv = errorDivContainer as HTMLDivElement | null;
+    if (!errorDiv) {
+      errorDiv = document.createElement('div');
+      errorDiv.id = 'regCodeError';
+      errorDiv.className = 'text-sm text-red-400 mb-2';
+      buttonsDiv.parentElement?.insertBefore(errorDiv, buttonsDiv);
+    }
+    const setRegError = (msg: string) => {
+      errorDiv!.textContent = msg;
+      setTimeout(() => { if (errorDiv) errorDiv.textContent = ''; }, 5000);
+    };
+
+    const handleFinalRegistration = async (finalVerificationData: any) => {
+      try {
+        const res = await fetch(`${API_URL}/users`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          // Registration runs before a session exists, so we skip credentials to avoid CORS failures
+          body: JSON.stringify({
+            ...userData,
+            ...finalVerificationData
+          })
         });
-      }
-      const proceedBtn = document.getElementById('proceedToLoginBtn') as HTMLButtonElement;
-      proceedBtn.onclick = () => {
-        modal.remove();
-        loginTab.click();
-      };
-    } else {
-      // --- Email Verification Flow ---
-      const regCodeInput = document.getElementById('regCodeInput') as HTMLInputElement;
-      const verifyBtn = document.getElementById('verifyRegCodeBtn') as HTMLButtonElement;
-      const resendBtn = document.getElementById('resendRegCodeBtn') as HTMLButtonElement;
-      const errorDiv = document.getElementById('regCodeError') as HTMLDivElement;
-      const messageP = document.getElementById('regModalMessage') as HTMLParagraphElement;
-      const buttonsDiv = document.getElementById('regModalButtons') as HTMLDivElement;
-      const contentDiv = document.getElementById('emailVerificationContent') as HTMLDivElement;
-      const titleH3 = document.getElementById('regModalTitle') as HTMLHeadingElement;
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || 'Final registration step failed.');
+        }
 
-      const setRegError = (msg: string) => {
-        errorDiv.textContent = msg;
-        setTimeout(() => { errorDiv.textContent = ''; }, 5000);
-      };
-
-      const handleSuccess = () => {
-        titleH3.textContent = 'Email Verified!';
-        messageP.textContent = 'Your registration is complete. You can now log in.';
-        contentDiv.innerHTML = ''; // Remove input and buttons
+        // Success
+        titleH3.textContent = 'Registration Complete!';
+        messageP.textContent = 'Your account has been created. You can now log in.';
+        if (document.getElementById('emailVerificationContent')) {
+          document.getElementById('emailVerificationContent')!.innerHTML = '';
+        }
+        const qrWrapper = document.getElementById('qrCanvasWrapper');
+        if (qrWrapper) qrWrapper.remove();
+        const secretWrapper = document.getElementById('totpSecretWrapper');
+        if (secretWrapper) secretWrapper.remove();
         buttonsDiv.innerHTML = `
           <button id="proceedToLoginBtn" class="w-full py-2 bg-gradient-to-r from-purple-500 to-pink-600 rounded-xl font-bold">Proceed to Login</button>
         `;
@@ -420,23 +437,58 @@ export function renderLoginPage() {
           modal.remove();
           loginTab.click();
         };
+      } catch (err) {
+        setRegError((err as Error).message);
+        return Promise.reject(err);
+      }
+    };
+
+    if (isAuthApp) {
+      // --- Authenticator App Flow ---
+      const canvas = document.getElementById('qrCanvas') as HTMLCanvasElement;
+      if (canvas && verificationData.otpauth_url) {
+        QRCode.toCanvas(canvas, verificationData.otpauth_url, { width: 256, margin: 1 }, (error) => {
+          if (error) {
+            console.error('QR Code generation failed:', error);
+            canvas.parentElement!.innerHTML = `<p class="text-red-400">Could not generate QR code.</p>`;
+          }
+        });
+      }
+      const completeBtn = document.getElementById('completeRegBtn') as HTMLButtonElement;
+      completeBtn.onclick = async () => {
+        completeBtn.textContent = 'Completing...';
+        completeBtn.disabled = true;
+        try {
+          // For TOTP, we pass the original verification token.
+          // The backend should verify that the user has a TOTP secret associated with this token.
+          await handleFinalRegistration({ verificationToken: verificationData.verificationToken });
+        } catch (err) {
+          completeBtn.textContent = 'Complete Registration';
+          completeBtn.disabled = false;
+        }
       };
+    } else {
+      // --- Email Verification Flow ---
+      const regCodeInput = document.getElementById('regCodeInput') as HTMLInputElement;
+      const verifyBtn = document.getElementById('verifyRegCodeBtn') as HTMLButtonElement;
+      const resendBtn = document.getElementById('resendRegCodeBtn') as HTMLButtonElement;
 
       const sendCode = async () => {
         try {
           resendBtn.textContent = 'Sending...';
           resendBtn.disabled = true;
-          const res = await fetch(`${API_URL_2FA}/auth/2fa/send`, {
+          const res = await fetch(`${API_URL_2FA}/auth/2fa/register/initiate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: user.id, email: user.email })
+            credentials: 'include',
+            body: JSON.stringify({ email: userData.email, authType: 'email' })
           });
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            throw new Error(err.error || 'Failed to send code');
-          }
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || 'Failed to resend code');
+          
+          verificationData.verificationToken = data.verificationToken; // Update token on resend
           messageP.textContent = 'A new code has been sent to your email.';
-          // Cooldown timer
+          
           let cooldown = 30;
           const interval = setInterval(() => {
             cooldown -= 1;
@@ -468,20 +520,24 @@ export function renderLoginPage() {
         try {
           verifyBtn.textContent = 'Verifying...';
           verifyBtn.disabled = true;
-          const res = await fetch(`${API_URL_2FA}/auth/2fa/verify`, {
+          const res = await fetch(`${API_URL_2FA}/auth/2fa/register/verify`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: user.id, code })
+            credentials: 'include',
+            body: JSON.stringify({ verificationToken: verificationData.verificationToken, code })
           });
           if (!res.ok) {
             const err = await res.json().catch(() => ({}));
             throw new Error(err.error || 'Verification failed');
           }
-          handleSuccess();
+          const finalVerificationData = await res.json();
+
+          // Now that email is verified, complete the registration
+          await handleFinalRegistration(finalVerificationData);
         } catch (err) {
           setRegError((err as Error).message);
           verifyBtn.disabled = false;
-          verifyBtn.textContent = 'Verify Email';
+          verifyBtn.textContent = 'Verify & Register';
         }
       };
     }
@@ -505,13 +561,24 @@ export function renderLoginPage() {
         throw new Error(error.error || 'Login failed');
       }
 
-      const user = await res.json();
-      console.debug('Login response user:', user);
+      const data = await res.json();
+
+      const user = data.user || data;
 
       // If backend explicitly tells us 2FA is required, just show the modal
       if (user && user.requires2FA) {
         const authType = user.authType || 'email';
         show2FAModal(user, authType);
+        return;
+      }
+
+      // If login already established a session (no 2FA required)
+      if (data.sessionIssued || data.success || data.token) {
+        localStorage.setItem('user', JSON.stringify(user));
+        localStorage.setItem('userId', String(user.id));
+        localStorage.setItem('username', user.username || '');
+        history.pushState({}, '', '/dashboard');
+        window.dispatchEvent(new PopStateEvent('popstate'));
         return;
       }
 
@@ -525,12 +592,12 @@ export function renderLoginPage() {
         const statusRes = await fetch(`${API_URL_2FA}/auth/2fa/status`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({ userId })
         });
 
         if (statusRes.ok) {
           const statusData = await statusRes.json().catch(() => ({}));
-          console.debug('/auth/2fa/status', statusData);
           if (statusData && statusData.requires2FA) {
             const authType = statusData.type || 'email';
             show2FAModal({ ...user, id: userId }, authType);
@@ -547,9 +614,7 @@ export function renderLoginPage() {
         }
 
         // If status endpoint 404s or returns error, fall through to fallback attempt below
-        console.debug('/auth/2fa/status returned non-ok:', statusRes.status);
       } catch (err) {
-        console.debug('2FA status check failed or not implemented:', err);
         // proceed to fallback attempt below
       }
 
@@ -558,21 +623,19 @@ export function renderLoginPage() {
         const sendRes = await fetch(`${API_URL_2FA}/auth/2fa/send`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({ userId })
         });
 
         if (sendRes.ok) {
-          const sendData = await sendRes.json().catch(() => ({}));
-          console.debug('/auth/2fa/send', sendData);
           // If the 2FA service accepted the send request, show the modal for email 2FA
           show2FAModal({ ...user, id: userId }, 'email');
           return;
         }
 
         // If send failed, log and continue to normal login
-        console.debug('/auth/2fa/send failed with status', sendRes.status);
       } catch (err) {
-        console.debug('Fallback 2FA send failed:', err);
+        // Fallback 2FA send failed
       }
 
       // No 2FA required or couldn't determine it — proceed to normal login
@@ -596,63 +659,35 @@ export function renderLoginPage() {
     const authTypeInput = (document.querySelector('input[name="authType"]:checked') as HTMLInputElement);
     const authType = authTypeInput ? authTypeInput.value : 'email';
 
+    const userData = { username, email, password, authType };
+
     try {
-      const res = await fetch(`${API_URL}/users`, {
+      // Step 1: Initiate registration with the 2FA service.
+      // This service should not create a user but generate a temporary token and send code/return secret.
+      const initiateRes = await fetch(`${API_URL_2FA}/auth/2fa/register/initiate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, email, password, authType })
+        credentials: 'include',
+        body: JSON.stringify({
+          username,
+          email,
+          authType
+        })
       });
 
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data.error || 'Registration failed');
+      const verificationData = await initiateRes.json().catch(() => ({}));
+      if (!initiateRes.ok) {
+        throw new Error(verificationData.error || 'Could not start registration process.');
       }
 
-      // created user returned either as data.user or data
-      const createdUser = (data && (data.user || data)) || null;
-
-      // If backend created the user and we have an id, trigger 2FA send/setup
-      if (createdUser && createdUser.id) {
-        try {
-          if (authType === 'email') {
-            // Ask 2FA service to send code; it may return the code for dev/demo
-            const sendRes = await fetch(`${API_URL_2FA}/auth/2fa/send`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ userId: createdUser.id, email: createdUser.email || email })
-            });
-            const sendData = await sendRes.json().catch(() => ({}));
-            if (!sendRes.ok) throw new Error(sendData.error || 'Failed to send verification code');
-
-            const returnedCode = sendData.code || null;
-            console.debug('2FA email code sent/returned:', returnedCode);
-            showRegistrationCodeModal(createdUser, returnedCode, 'email');
-            return;
-          } else if (authType === 'authApp') {
-            // Ask 2FA service to set up TOTP for the user and return secret/otpauth_url (for QR)
-            const setupRes = await fetch(`${API_URL_2FA}/auth/2fa/setup`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ userId: createdUser.id })
-            });
-            const setupData = await setupRes.json().catch(() => ({}));
-            if (!setupRes.ok) throw new Error(setupData.error || 'Failed to setup authenticator app');
-
-            const secretOrCode = setupData.secret || setupData.code || null;
-            showRegistrationCodeModal(createdUser, secretOrCode, 'authApp', { otpauth_url: setupData.otpauth_url });
-            return;
-          }
-        } catch (err) {
-          // If 2FA send/setup fails, still notify user and fall back to asking them to login
-          showError((err as Error).message || '2FA setup failed. Please login and try again.');
-          setTimeout(() => loginTab.click(), 1500);
-          return;
-        }
+      if (!verificationData.verificationToken) {
+        throw new Error('Missing verification token from server.');
       }
 
-      // If we don't have a created user id or no 2FA step, just show success and go to login
-      showError('Registration successful! Please login.');
-      setTimeout(() => loginTab.click(), 1500);
+      // Step 2: Show the appropriate modal for code entry or QR scan.
+      // The password is included in userData to be used in the final registration step.
+      showRegistrationCodeModal(userData, verificationData);
+
     } catch (err) {
       showError((err as Error).message);
     }

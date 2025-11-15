@@ -11,6 +11,7 @@ import { fileURLToPath } from 'url';
 const fastify = Fastify({ logger: true });
 const PORT = process.env.PORT || 3103;
 const MATCHES_SERVICE_URL = process.env.MATCHES_SERVICE_URL || 'http://matches-service:3102';
+const TWO_FA_SERVICE_URL = process.env.TWO_FA_SERVICE_URL || 'http://auth-service:3105';
 
 const nowIso = () => new Date().toISOString();
 
@@ -234,12 +235,13 @@ fastify.get('/users/:id', async (request, reply) => {
 
 // Create new user (registration)
 fastify.post('/users', async (request, reply) => {
-  const { username, email, password, display_name, authType } = request.body;
+  const { username, email, password, display_name, authType, verificationToken } = request.body;
 
   const normalizedUsername = username?.trim();
   const normalizedEmail = email?.trim().toLowerCase();
   const requestedDisplayName = (display_name ?? normalizedUsername)?.trim();
   const userAuthType = authType || 'email';
+  const normalizedVerificationToken = typeof verificationToken === 'string' ? verificationToken.trim() : '';
 
   if (!normalizedUsername || !normalizedEmail) {
     return reply.code(400).send({ error: 'Username and email required' });
@@ -258,22 +260,59 @@ fastify.post('/users', async (request, reply) => {
     return reply.code(409).send({ error: 'Display name already in use' });
   }
 
+  const cleanupUser = (id) => {
+    try {
+      db.prepare('DELETE FROM user_stats WHERE user_id = ?').run(id);
+    } catch (err) {
+      fastify.log.error({ err }, 'Failed to cleanup user_stats after registration failure');
+    }
+    try {
+      db.prepare('DELETE FROM users WHERE id = ?').run(id);
+    } catch (err) {
+      fastify.log.error({ err }, 'Failed to cleanup users after registration failure');
+    }
+  };
+
   try {
     const password_hash = password ? await bcrypt.hash(password, 10) : null;
     const result = db.prepare(`
       INSERT INTO users (username, email, password_hash, display_name, avatar_url, last_seen, auth_type)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(normalizedUsername, normalizedEmail, password_hash, displayName, DEFAULT_AVATAR_URL, nowIso(), userAuthType);
+    const newUserId = result.lastInsertRowid;
     
     // Initialize stats for new user
     db.prepare(`
       INSERT INTO user_stats (user_id) VALUES (?)
-    `).run(result.lastInsertRowid);
+    `).run(newUserId);
+
+    if (normalizedVerificationToken) {
+      try {
+        const finalizeRes = await fetch(`${TWO_FA_SERVICE_URL}/auth/2fa/register/complete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ verificationToken: normalizedVerificationToken, userId: newUserId })
+        });
+        const finalizePayload = await finalizeRes.json().catch(() => ({}));
+        if (!finalizeRes.ok) {
+          const message = finalizePayload.error || 'Failed to finalize two-factor setup';
+          cleanupUser(newUserId);
+          return reply.code(finalizeRes.status).send({ error: message });
+        }
+      } catch (err) {
+        cleanupUser(newUserId);
+        fastify.log.error({ err }, '2FA finalize request failed');
+        return reply.code(500).send({ error: 'Failed to finalize two-factor setup' });
+      }
+    } else if (userAuthType === 'authApp') {
+      cleanupUser(newUserId);
+      return reply.code(400).send({ error: 'verificationToken is required to enable authenticator 2FA' });
+    }
     
     reply.code(201).send({ 
       message: 'User created',
       user: {
-        id: result.lastInsertRowid,
+        id: newUserId,
         username: normalizedUsername,
         email: normalizedEmail,
         display_name: displayName,

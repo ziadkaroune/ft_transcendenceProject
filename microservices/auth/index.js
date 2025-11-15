@@ -1,11 +1,13 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import rateLimit from '@fastify/rate-limit';
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
-// import axios from 'axios';
-import { exec } from 'child_process'; // Import exec
+import { exec } from 'child_process';
+import axios from 'axios';
+import jwt from 'jsonwebtoken';
 
 export async function sendMailerooEmail(from, to, display_name, subject, html, plain_text) {
   const apiKey = process.env.MAILEROO;
@@ -75,6 +77,155 @@ export async function sendMailerooEmail(from, to, display_name, subject, html, p
 const fastify = Fastify({ logger: true });
 const PORT = process.env.PORT || 3105;
 
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  throw new Error('JWT_SECRET must be defined and at least 32 characters long.');
+}
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
+const JWT_ISSUER = process.env.JWT_ISSUER || 'ft_transcendence.auth';
+const JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'ft_transcendence.clients';
+const JWT_COOKIE_NAME = process.env.JWT_COOKIE_NAME || 'ft_session';
+const JWT_COOKIE_DOMAIN = process.env.JWT_COOKIE_DOMAIN || undefined;
+const JWT_COOKIE_PATH = process.env.JWT_COOKIE_PATH || '/';
+const JWT_COOKIE_SAMESITE = process.env.JWT_COOKIE_SAMESITE || 'Strict';
+const COOKIE_SECURE = process.env.JWT_COOKIE_SECURE ? process.env.JWT_COOKIE_SECURE === 'true' : (process.env.NODE_ENV !== 'development');
+const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX || 120);
+const RATE_LIMIT_TIME_WINDOW = process.env.RATE_LIMIT_TIME_WINDOW || '1 minute';
+const SENSITIVE_RATE_LIMIT_MAX = Number(process.env.SENSITIVE_RATE_LIMIT_MAX || 10);
+const SENSITIVE_RATE_LIMIT_WINDOW = process.env.SENSITIVE_RATE_LIMIT_WINDOW || '1 minute';
+const RATE_LIMIT_ALLOW_LIST = (process.env.RATE_LIMIT_ALLOW_LIST || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
+const ENCRYPTED_SECRET_PREFIX = 'enc:';
+const SECRET_ENCRYPTION_ALGO = 'aes-256-gcm';
+const SECRET_IV_LENGTH = 12;
+const SECRET_TAG_LENGTH = 16;
+const SECRET_ENCRYPTION_KEY = (() => {
+  const rawKey = process.env.TOTP_SECRET_KEY || JWT_SECRET;
+  return crypto.createHash('sha256').update(String(rawKey)).digest();
+})();
+
+const PRIMARY_AUTH_SERVICE_URL = process.env.PRIMARY_AUTH_SERVICE_URL || 'http://localhost:3103';
+const PRIMARY_AUTH_VERIFY_PATH = process.env.PRIMARY_AUTH_VERIFY_PATH || '/users';
+const ALLOW_USER_VALIDATION_BYPASS = process.env.ALLOW_USER_VALIDATION_BYPASS === 'true';
+
+function parseExpiry(value) {
+  if (typeof value === 'number') return value;
+  const match = /^(\d+)([smhd])?$/.exec(String(value).trim());
+  if (!match) return 3600;
+  const amount = Number(match[1]);
+  const unit = match[2] || 's';
+  const multipliers = { s: 1, m: 60, h: 3600, d: 86400 };
+  return amount * multipliers[unit];
+}
+
+const JWT_MAX_AGE_SECONDS = parseExpiry(JWT_EXPIRES_IN);
+
+function issueSessionCookie(reply, payload) {
+  const token = jwt.sign(payload, JWT_SECRET, {
+    expiresIn: JWT_EXPIRES_IN,
+    issuer: JWT_ISSUER,
+    audience: JWT_AUDIENCE,
+    algorithm: 'HS256'
+  });
+
+  const parts = [
+    `${JWT_COOKIE_NAME}=${token}`,
+    'HttpOnly',
+    `Path=${JWT_COOKIE_PATH}`,
+    `SameSite=${JWT_COOKIE_SAMESITE}`,
+    `Max-Age=${JWT_MAX_AGE_SECONDS}`
+  ];
+
+  if (COOKIE_SECURE) {
+    parts.push('Secure');
+  }
+
+  if (JWT_COOKIE_DOMAIN) {
+    parts.push(`Domain=${JWT_COOKIE_DOMAIN}`);
+  }
+
+  reply.header('Set-Cookie', parts.join('; '));
+}
+
+async function fetchUserFromPrimaryAuth(userId) {
+  if (!PRIMARY_AUTH_SERVICE_URL || !PRIMARY_AUTH_VERIFY_PATH) {
+    return null;
+  }
+
+  const normalizedId = encodeURIComponent(String(userId).trim());
+  const normalizedPath = PRIMARY_AUTH_VERIFY_PATH.endsWith('/')
+    ? PRIMARY_AUTH_VERIFY_PATH.slice(0, -1)
+    : PRIMARY_AUTH_VERIFY_PATH;
+  const url = `${PRIMARY_AUTH_SERVICE_URL}${normalizedPath}/${normalizedId}`;
+
+  try {
+    const response = await axios.get(url, { timeout: 4000 });
+    if (response.status >= 200 && response.status < 300 && response.data) {
+      const user = response.data.user || response.data;
+      if (user && user.id) {
+        return user;
+      }
+    }
+    return null;
+  } catch (err) {
+    fastify.log.error({ err, userId }, 'Failed to validate user against primary auth service');
+    return null;
+  }
+}
+
+function sanitizeUserProfile(user, fallbackId) {
+  if (!user) {
+    return {
+      id: fallbackId,
+      username: `user${fallbackId}`
+    };
+  }
+
+  const {
+    password,
+    hashed_password,
+    totp_secret,
+    secret,
+    ...safeUser
+  } = user;
+
+  if (!safeUser.username && fallbackId) {
+    safeUser.username = `user${fallbackId}`;
+  }
+
+  return safeUser;
+}
+
+function encryptTotpSecret(plaintext) {
+  const iv = crypto.randomBytes(SECRET_IV_LENGTH);
+  const cipher = crypto.createCipheriv(SECRET_ENCRYPTION_ALGO, SECRET_ENCRYPTION_KEY, iv);
+  const encrypted = Buffer.concat([cipher.update(String(plaintext), 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return `${ENCRYPTED_SECRET_PREFIX}${Buffer.concat([iv, authTag, encrypted]).toString('base64')}`;
+}
+
+function decryptTotpSecret(storedValue) {
+  if (typeof storedValue !== 'string') {
+    throw new Error('Invalid stored secret value');
+  }
+  if (!storedValue.startsWith(ENCRYPTED_SECRET_PREFIX)) {
+    throw new Error('Secret is not encrypted');
+  }
+  const payload = Buffer.from(storedValue.slice(ENCRYPTED_SECRET_PREFIX.length), 'base64');
+  if (payload.length <= SECRET_IV_LENGTH + SECRET_TAG_LENGTH) {
+    throw new Error('Encrypted payload too short');
+  }
+  const iv = payload.subarray(0, SECRET_IV_LENGTH);
+  const authTag = payload.subarray(SECRET_IV_LENGTH, SECRET_IV_LENGTH + SECRET_TAG_LENGTH);
+  const ciphertext = payload.subarray(SECRET_IV_LENGTH + SECRET_TAG_LENGTH);
+  const decipher = crypto.createDecipheriv(SECRET_ENCRYPTION_ALGO, SECRET_ENCRYPTION_KEY, iv);
+  decipher.setAuthTag(authTag);
+  const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  return decrypted.toString('utf8');
+}
+
 // Initialize SQLite database (kept from original file)
 const dbPath = '/app/database/2fa.db';
 const dbDir = path.dirname(dbPath);
@@ -91,13 +242,132 @@ try {
   fastify.log.warn('Could not open DB, continuing with in-memory token map', err);
 }
 
+let upsertTotpSecretStmt;
+let selectTotpSecretStmt;
+let deleteTotpSecretStmt;
+
+if (db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS totp_secrets (
+      user_id TEXT PRIMARY KEY,
+      secret TEXT NOT NULL,
+      auth_type TEXT DEFAULT 'authApp',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  upsertTotpSecretStmt = db.prepare(`
+    INSERT INTO totp_secrets (user_id, secret, auth_type)
+    VALUES (?, ?, ?)
+    ON CONFLICT(user_id)
+    DO UPDATE SET secret = excluded.secret,
+                  auth_type = excluded.auth_type,
+                  updated_at = CURRENT_TIMESTAMP
+  `);
+
+  selectTotpSecretStmt = db.prepare(`
+    SELECT secret, auth_type FROM totp_secrets WHERE user_id = ?
+  `);
+
+  deleteTotpSecretStmt = db.prepare(`
+    DELETE FROM totp_secrets WHERE user_id = ?
+  `);
+}
+
+function persistTotpSecret(userId, secret, authType = 'authApp') {
+  if (!upsertTotpSecretStmt) return false;
+  const storedSecret = encryptTotpSecret(secret);
+  upsertTotpSecretStmt.run(String(userId), storedSecret, authType);
+  return true;
+}
+
+function loadTotpSecret(userId) {
+  if (!selectTotpSecretStmt) return null;
+  const row = selectTotpSecretStmt.get(String(userId));
+  if (!row || !row.secret) {
+    return null;
+  }
+
+  const storedValue = row.secret;
+  const authType = row.auth_type || 'authApp';
+
+  if (typeof storedValue === 'string' && storedValue.startsWith(ENCRYPTED_SECRET_PREFIX)) {
+    try {
+      const plaintext = decryptTotpSecret(storedValue);
+      return { secret: plaintext, auth_type: authType };
+    } catch (err) {
+      fastify.log.error({ err, userId }, 'Failed to decrypt TOTP secret');
+      return null;
+    }
+  }
+
+  // Legacy plaintext secret detected — re-encrypt transparently
+  fastify.log.warn({ userId }, 'Detected plaintext TOTP secret; encrypting now');
+  persistTotpSecret(userId, storedValue, authType);
+  return { secret: storedValue, auth_type: authType };
+}
+
+function removeTotpSecret(userId) {
+  if (!deleteTotpSecretStmt) return false;
+  deleteTotpSecretStmt.run(String(userId));
+  return true;
+}
+
+function hydrateAuthAppEntry(userId) {
+  const key = String(userId);
+  const existing = token_map.get(key);
+  if (existing && existing.type === 'authApp' && existing.secret) {
+    return existing;
+  }
+
+  const row = loadTotpSecret(key);
+  if (row && row.secret) {
+    const entry = { type: row.auth_type || 'authApp', secret: row.secret };
+    token_map.set(key, entry);
+    return entry;
+  }
+
+  return null;
+}
+
+function buildRateLimitRouteConfig(max = SENSITIVE_RATE_LIMIT_MAX, timeWindow = SENSITIVE_RATE_LIMIT_WINDOW) {
+  return {
+    config: {
+      rateLimit: {
+        max,
+        timeWindow
+      }
+    }
+  };
+}
+
 // Register CORS
 await fastify.register(cors, {
   origin: true,
-  methods: ['GET', 'POST', 'DELETE', 'PUT', 'OPTIONS']
+  methods: ['GET', 'POST', 'DELETE', 'PUT', 'OPTIONS'],
+  credentials: true
+});
+
+await fastify.register(rateLimit, {
+  global: true,
+  max: RATE_LIMIT_MAX,
+  timeWindow: RATE_LIMIT_TIME_WINDOW,
+  allowList: RATE_LIMIT_ALLOW_LIST,
+  skipOnError: true,
+  addHeaders: true,
+  addHeadersOnSuccess: true,
+  addHeadersOnExceeding: true,
+  errorResponseBuilder: (_request, context) => ({
+    statusCode: 429,
+    error: 'Too Many Requests',
+    message: 'Rate limit exceeded. Please wait before retrying.',
+    retryAfter: Math.ceil(context.ttl / 1000)
+  })
 });
 
 const token_map = new Map(); // userId -> { type: 'email'|'authApp', code?, secret?, validUntil?, failedAttempts?, lockoutUntil? }
+const registration_tokens = new Map(); // verificationToken -> { email, username, authType, code?, secret?, validUntil }
 
 // Utility: generate numeric code
 function generateNumericCode(length = 6) {
@@ -178,8 +448,123 @@ function generateRandomToken(len = 48) {
   return crypto.randomBytes(len).toString('hex');
 }
 
+// Endpoint: Initiate registration process
+fastify.post('/auth/2fa/register/initiate', buildRateLimitRouteConfig(), async (request, reply) => {
+  const { email, username, authType } = request.body || {};
+  if (!email || !username || !authType) {
+    return reply.status(400).send({ error: 'email, username, and authType are required' });
+  }
+
+  const verificationToken = generateRandomToken(32);
+  const validUntil = Date.now() + 10 * 60 * 1000; // 10 minutes validity
+
+  if (authType === 'email') {
+    const code = generateNumericCode(6);
+    registration_tokens.set(verificationToken, { email, username, authType, code, validUntil });
+
+    const subject = 'Verify Your Email for Registration';
+    const html = `<p>Welcome, ${username}!</p><p>Your verification code is: <strong>${code}</strong></p><p>This code is valid for 10 minutes.</p>`;
+    const plain = `Welcome, ${username}!\nYour verification code is: ${code}\nThis code is valid for 10 minutes.`;
+    const fromAddress = process.env.MAILEROO_FROM || 'no-reply@example.com';
+
+    try {
+      if (!process.env.MAILEROO) {
+        fastify.log.warn(`MAILEROO env not set. Registration code for ${email}: ${code}`);
+        return reply.send({ verificationToken });
+      }
+      await sendMailerooEmail(fromAddress, email, username, subject, html, plain);
+      fastify.log.info(`Registration code sent to ${email}`);
+      return reply.send({ verificationToken });
+    } catch (err) {
+      fastify.log.error({ err }, 'Failed to send registration email');
+      return reply.status(500).send({ error: 'Failed to send verification email' });
+    }
+  } else if (authType === 'authApp') {
+    const secret = generateBase32Secret(20);
+    registration_tokens.set(verificationToken, { email, username, authType, secret, validUntil });
+
+    const label = `ft_transcendence:${username}`;
+    const issuer = 'ft_transcendence';
+    const otpauth_url = `otpauth://totp/${encodeURIComponent(label)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
+
+    fastify.log.info(`TOTP secret generated for pending registration of user ${username}`);
+    return reply.send({ verificationToken, secret, otpauth_url });
+  } else {
+    return reply.status(400).send({ error: 'Invalid authType specified' });
+  }
+});
+
+// Endpoint: Verify code for a pending registration
+fastify.post('/auth/2fa/register/verify', buildRateLimitRouteConfig(), async (request, reply) => {
+  const { verificationToken, code } = request.body || {};
+  if (!verificationToken || !code) {
+    return reply.status(400).send({ error: 'verificationToken and code are required' });
+  }
+
+  const entry = registration_tokens.get(verificationToken);
+  if (!entry) {
+    return reply.status(400).send({ error: 'Invalid or expired verification token' });
+  }
+
+  if (Date.now() > entry.validUntil) {
+    registration_tokens.delete(verificationToken);
+    return reply.status(400).send({ error: 'Verification token expired' });
+  }
+
+  if (entry.authType === 'email' && entry.code === String(code).trim()) {
+    // For email, the code is one-time. We can now consider it verified.
+    // The user service will consume this token.
+    entry.verified = true;
+    registration_tokens.set(verificationToken, entry);
+    fastify.log.info(`Registration for ${entry.email} verified successfully.`);
+    return reply.send({ verificationToken });
+  }
+
+  return reply.status(400).send({ error: 'Invalid code' });
+});
+
+// Endpoint: finalize registration (persist 2FA preferences)
+fastify.post('/auth/2fa/register/complete', buildRateLimitRouteConfig(), async (request, reply) => {
+  const { verificationToken, userId } = request.body || {};
+  if (!verificationToken || !userId) {
+    return reply.status(400).send({ error: 'verificationToken and userId are required' });
+  }
+
+  const entry = registration_tokens.get(verificationToken);
+  if (!entry) {
+    return reply.status(400).send({ error: 'Invalid or expired verification token' });
+  }
+
+  if (Date.now() > entry.validUntil) {
+    registration_tokens.delete(verificationToken);
+    return reply.status(400).send({ error: 'Verification token expired' });
+  }
+
+  if (entry.authType === 'authApp') {
+    if (!entry.secret) {
+      return reply.status(400).send({ error: 'Missing authenticator secret for this token' });
+    }
+
+    persistTotpSecret(userId, entry.secret, 'authApp');
+    token_map.set(String(userId), { type: 'authApp', secret: entry.secret });
+    registration_tokens.delete(verificationToken);
+
+    return reply.send({ success: true, authType: 'authApp' });
+  }
+
+  if (entry.authType === 'email') {
+    if (!entry.verified) {
+      return reply.status(400).send({ error: 'Email verification has not been completed yet' });
+    }
+    registration_tokens.delete(verificationToken);
+    return reply.send({ success: true, authType: 'email' });
+  }
+
+  return reply.status(400).send({ error: 'Unsupported authentication type' });
+});
+
 // Endpoint: send email code to user (development: returns code when MAILEROO is missing)
-fastify.post('/auth/2fa/send', async (request, reply) => {
+fastify.post('/auth/2fa/send', buildRateLimitRouteConfig(), async (request, reply) => {
   const { userId, email } = request.body || {};
   if (!userId && !email) {
     return reply.status(400).send({ error: 'userId or email is required' });
@@ -235,7 +620,7 @@ fastify.post('/auth/2fa/send', async (request, reply) => {
 });
 
 // Endpoint: setup authenticator app for user (returns secret + otpauth_url)
-fastify.post('/auth/2fa/setup', async (request, reply) => {
+fastify.post('/auth/2fa/setup', buildRateLimitRouteConfig(), async (request, reply) => {
   const { userId, issuer } = request.body || {};
   if (!userId) {
     return reply.status(400).send({ error: 'userId is required' });
@@ -257,13 +642,17 @@ fastify.post('/auth/2fa/setup', async (request, reply) => {
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 
-fastify.post('/auth/2fa/verify', async (request, reply) => {
+fastify.post('/auth/2fa/verify', buildRateLimitRouteConfig(), async (request, reply) => {
   const { userId, code } = request.body || {};
   if (!userId || !code) {
     return reply.status(400).send({ error: 'userId and code are required' });
   }
 
-  const entry = token_map.get(String(userId));
+  const key = String(userId);
+  let entry = token_map.get(key);
+  if (!entry) {
+    entry = hydrateAuthAppEntry(key);
+  }
   if (!entry) {
     return reply.status(400).send({ error: 'No 2FA setup or code found for this user' });
   }
@@ -308,17 +697,26 @@ fastify.post('/auth/2fa/verify', async (request, reply) => {
     // Success: clean up and send response
     if (entry.type === 'email') {
       // on success, remove the stored code (one-time)
-      token_map.delete(String(userId));
+      token_map.delete(key);
     } else {
       // For authApp, just reset any failure tracking
       delete entry.failedAttempts;
       delete entry.lockoutUntil;
-      token_map.set(String(userId), entry);
+      token_map.set(key, entry);
     }
 
-    // Return a demo "user" object — in production, fetch actual user from users service
-    const demoUser = { id: userId, username: `user${userId}` };
-    return reply.send(demoUser);
+    const verifiedUser = await fetchUserFromPrimaryAuth(userId);
+    if (!verifiedUser && !ALLOW_USER_VALIDATION_BYPASS) {
+      return reply.status(403).send({ error: 'Unable to verify user with primary auth service' });
+    }
+
+    const safeUser = sanitizeUserProfile(verifiedUser, userId);
+    issueSessionCookie(reply, {
+      sub: String(safeUser.id || userId),
+      authType: entry.type
+    });
+
+    return reply.send({ success: true, user: safeUser, sessionIssued: true });
   } else {
     // Failure: update attempt counter and potentially lock out
     entry.failedAttempts = (entry.failedAttempts || 0) + 1;
@@ -329,7 +727,7 @@ fastify.post('/auth/2fa/verify', async (request, reply) => {
       fastify.log.warn(`User ${userId} locked out due to too many failed 2FA attempts.`);
     }
 
-    token_map.set(String(userId), entry);
+    token_map.set(key, entry);
 
     return reply.status(400).send({ error: 'Invalid code' });
   }
@@ -344,7 +742,13 @@ fastify.post('/auth/2fa/status', async (request, reply) => {
   }
 
   // Check in-memory map first (for authApp TOTP secrets)
-  const entry = token_map.get(String(userId));
+  const key = String(userId);
+  let entry = token_map.get(key);
+  if (entry && entry.type === 'authApp' && entry.secret) {
+    return reply.send({ requires2FA: true, type: 'authApp' });
+  }
+
+  entry = hydrateAuthAppEntry(key);
   if (entry && entry.type === 'authApp' && entry.secret) {
     return reply.send({ requires2FA: true, type: 'authApp' });
   }
