@@ -1,11 +1,20 @@
 import QRCode from 'qrcode';
+import LoginTranslations from '../languages/LoginLanguages';
 
 const API_URL = 'http://localhost:3103';
 const API_URL_2FA = 'http://localhost:3105';
+const LOGIN_DEFAULT_LANG = 'eng';
 
 export function renderLoginPage() {
   const app = document.getElementById('app');
   if (!app) return;
+
+  const currentLang = (localStorage.getItem('lang') || LOGIN_DEFAULT_LANG) as keyof typeof LoginTranslations;
+  const fallbackPack = LoginTranslations[LOGIN_DEFAULT_LANG];
+  const t = (key: keyof typeof LoginTranslations['eng']) => {
+    const langPack = LoginTranslations[currentLang] || fallbackPack;
+    return langPack[key] || fallbackPack[key];
+  };
 
   app.innerHTML = `
     <div class="relative flex items-center justify-center min-h-screen w-full overflow-hidden 
@@ -26,12 +35,12 @@ export function renderLoginPage() {
           <button id="loginTab" 
                   class="flex-1 py-2 rounded-lg font-semibold transition-all duration-300 
                          bg-gradient-to-r from-purple-500 to-pink-600 text-white">
-            Login
+            ${t('tabLogin')}
           </button>
           <button id="registerTab" 
                   class="flex-1 py-2 rounded-lg font-semibold transition-all duration-300 
                          text-gray-300 hover:text-white">
-            Register
+            ${t('tabRegister')}
           </button>
         </div>
 
@@ -39,18 +48,18 @@ export function renderLoginPage() {
         <form id="loginForm" class="space-y-5">
           <h2 class="text-3xl font-bold text-center mb-6 text-transparent bg-clip-text 
                      bg-gradient-to-r from-purple-400 via-pink-400 to-cyan-400">
-            Welcome Back
+            ${t('loginHeading')}
           </h2>
 
           <div>
-            <label class="block text-sm font-medium text-cyan-300 mb-2">Email</label>
+            <label class="block text-sm font-medium text-cyan-300 mb-2">${t('emailLabel')}</label>
             <input type="email" id="loginEmail" required
                    class="w-full bg-black/50 border border-cyan-500/60 rounded-xl px-4 py-3 
                           text-white focus:outline-none focus:ring-2 focus:ring-cyan-400" />
           </div>
 
           <div>
-            <label class="block text-sm font-medium text-cyan-300 mb-2">Password</label>
+            <label class="block text-sm font-medium text-cyan-300 mb-2">${t('passwordLabel')}</label>
             <input type="password" id="loginPassword" required
                    class="w-full bg-black/50 border border-cyan-500/60 rounded-xl px-4 py-3 
                           text-white focus:outline-none focus:ring-2 focus:ring-cyan-400" />
@@ -59,7 +68,7 @@ export function renderLoginPage() {
           <button type="submit" 
                   class="w-full py-3 bg-gradient-to-r from-purple-500 to-pink-600 rounded-xl 
                          font-bold text-lg shadow-lg hover:scale-105 transition-all">
-            Login
+            ${t('loginButton')}
           </button>
         </form>
 
@@ -67,25 +76,25 @@ export function renderLoginPage() {
         <form id="registerForm" class="space-y-5 hidden">
           <h2 class="text-3xl font-bold text-center mb-6 text-transparent bg-clip-text 
                      bg-gradient-to-r from-purple-400 via-pink-400 to-cyan-400">
-            Create Account
+            ${t('registerHeading')}
           </h2>
 
           <div>
-            <label class="block text-sm font-medium text-cyan-300 mb-2">Username</label>
+            <label class="block text-sm font-medium text-cyan-300 mb-2">${t('usernameLabel')}</label>
             <input type="text" id="regUsername" required
                    class="w-full bg-black/50 border border-cyan-500/60 rounded-xl px-4 py-3 
                           text-white focus:outline-none focus:ring-2 focus:ring-cyan-400" />
           </div>
 
           <div>
-            <label class="block text-sm font-medium text-cyan-300 mb-2">Email</label>
+            <label class="block text-sm font-medium text-cyan-300 mb-2">${t('emailLabel')}</label>
             <input type="email" id="regEmail" required
                    class="w-full bg-black/50 border border-cyan-500/60 rounded-xl px-4 py-3 
                           text-white focus:outline-none focus:ring-2 focus:ring-cyan-400" />
           </div>
 
           <div>
-            <label class="block text-sm font-medium text-cyan-300 mb-2">Password</label>
+            <label class="block text-sm font-medium text-cyan-300 mb-2">${t('passwordLabel')}</label>
             <input type="password" id="regPassword" required minlength="6"
                    class="w-full bg-black/50 border border-cyan-500/60 rounded-xl px-4 py-3 
                           text-white focus:outline-none focus:ring-2 focus:ring-cyan-400" />
@@ -93,24 +102,24 @@ export function renderLoginPage() {
 
           <!-- 2FA selection -->
           <div class="text-sm text-cyan-300">
-            <div class="mb-2 font-medium">Two-factor (2FA) method</div>
+            <div class="mb-2 font-medium">${t('twoFactorMethodLabel')}</div>
             <div class="flex gap-4 items-center">
               <label class="flex items-center gap-2">
                 <input type="radio" name="authType" value="email" checked />
-                <span>Email (receive code by email)</span>
+                <span>${t('twoFactorEmailOption')}</span>
               </label>
               <label class="flex items-center gap-2">
                 <input type="radio" name="authType" value="authApp" />
-                <span>Authenticator app (TOTP)</span>
+                <span>${t('twoFactorAppOption')}</span>
               </label>
             </div>
-            <div class="mt-2 text-xs text-cyan-200">Choose whether you'd like codes by email or to use an authenticator app (Google Authenticator, Authy, etc.).</div>
+            <div class="mt-2 text-xs text-cyan-200">${t('twoFactorHelper')}</div>
           </div>
 
           <button type="submit" 
                   class="w-full py-3 bg-gradient-to-r from-cyan-500 to-blue-600 rounded-xl 
                          font-bold text-lg shadow-lg hover:scale-105 transition-all">
-            Register
+            ${t('registerButton')}
           </button>
         </form>
 
@@ -120,7 +129,7 @@ export function renderLoginPage() {
         <button id="backHomeBtn"
                 class="w-full mt-6 py-2 bg-gray-800/50 rounded-xl text-gray-300 
                        hover:bg-gray-700/50 transition-all">
-          ← Back to Home
+          ← ${t('backHome')}
         </button>
       </div>
     </div>
@@ -176,26 +185,26 @@ export function renderLoginPage() {
     modal.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4';
     modal.innerHTML = `
       <div class="max-w-md w-full bg-white/5 backdrop-blur-lg border border-white/20 rounded-2xl p-6 text-white">
-        <h3 class="text-2xl font-semibold mb-2">Two-factor authentication</h3>
+        <h3 class="text-2xl font-semibold mb-2">${t('twoFATitle')}</h3>
         <p id="twoFAMessage" class="text-sm text-cyan-200 mb-4">
-          ${authType === 'email' ? 'A security code was sent to your email.' : 'Enter the 6-digit code from your authenticator app.'}
+          ${authType === 'email' ? t('twoFAMessageEmail') : t('twoFAMessageApp')}
         </p>
 
         <div class="mb-4">
-          <input id="twoFAInput" type="text" maxlength="10" placeholder="Enter security code"
+          <input id="twoFAInput" type="text" maxlength="10" placeholder="${t('twoFACodePlaceholder')}"
                  class="w-full bg-black/50 border border-cyan-500/60 rounded-xl px-4 py-3 text-white focus:outline-none" />
         </div>
 
         <div class="flex gap-3">
-          <button id="verify2FABtn" class="flex-1 py-2 bg-gradient-to-r from-purple-500 to-pink-600 rounded-xl font-bold">Verify</button>
-          <button id="cancel2FABtn" class="flex-1 py-2 bg-gray-800/40 rounded-xl">Cancel</button>
+          <button id="verify2FABtn" class="flex-1 py-2 bg-gradient-to-r from-purple-500 to-pink-600 rounded-xl font-bold">${t('verifyButton')}</button>
+          <button id="cancel2FABtn" class="flex-1 py-2 bg-gray-800/40 rounded-xl">${t('cancelButton')}</button>
         </div>
 
         ${
           authType === 'email'
             ? `
           <div class="mt-3 flex items-center justify-between">
-            <button id="resend2FABtn" class="text-sm text-cyan-200 underline">Resend code</button>
+            <button id="resend2FABtn" class="text-sm text-cyan-200 underline">${t('resendCode')}</button>
             <div id="twoFAError" class="text-sm text-red-400"></div>
           </div>
           `
@@ -227,7 +236,7 @@ export function renderLoginPage() {
     async function sendCode() {
       try {
         if (resend2FABtn) {
-          resend2FABtn.textContent = 'Sending...';
+          resend2FABtn.textContent = t('sendingText');
           resend2FABtn.setAttribute('disabled', 'true');
         }
         const res = await fetch(`${API_URL_2FA}/auth/2fa/send`, {
@@ -238,26 +247,26 @@ export function renderLoginPage() {
         });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          throw new Error(err.error || 'Failed to send code');
+          throw new Error(err.error || t('sendCodeError'));
         }
-        twoFAMessage.textContent = 'A security code has been sent to your email.';
+        twoFAMessage.textContent = t('codeSentEmail');
         if (resend2FABtn) {
           // simple cooldown
           let cooldown = 30;
           const interval = setInterval(() => {
             cooldown -= 1;
-            resend2FABtn.textContent = `Resend (${cooldown}s)`;
+            resend2FABtn.textContent = `${t('codeResendCooldown')} (${cooldown}s)`;
             if (cooldown <= 0) {
               clearInterval(interval);
               resend2FABtn.removeAttribute('disabled');
-              resend2FABtn.textContent = 'Resend code';
+              resend2FABtn.textContent = t('resendCode');
             }
           }, 1000);
         }
       } catch (err) {
         if (resend2FABtn) {
           resend2FABtn.removeAttribute('disabled');
-          resend2FABtn.textContent = 'Resend code';
+          resend2FABtn.textContent = t('resendCode');
         }
         setTwoFAError((err as Error).message);
       }
@@ -282,11 +291,11 @@ export function renderLoginPage() {
     verify2FABtn.onclick = async () => {
       const code = twoFAInput.value.trim();
       if (!code) {
-        setTwoFAError('Please enter the code.');
+        setTwoFAError(t('codeInputRequired'));
         return;
       }
       try {
-        verify2FABtn.textContent = 'Verifying...';
+        verify2FABtn.textContent = t('verifyingText');
         verify2FABtn.setAttribute('disabled', 'true');
         const res = await fetch(`${API_URL_2FA}/auth/2fa/verify`, {
           method: 'POST',
@@ -296,11 +305,11 @@ export function renderLoginPage() {
         });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          throw new Error(err.error || 'Invalid code');
+          throw new Error(err.error || t('invalidCode'));
         }
         const data = await res.json();
         if (!(data && (data.success || data.sessionIssued || data.user))) {
-          throw new Error('Session could not be established.');
+          throw new Error(t('sessionError'));
         }
         const verifiedUser = data.user || user;
         if (verifiedUser) {
@@ -316,7 +325,7 @@ export function renderLoginPage() {
       } catch (err) {
         setTwoFAError((err as Error).message);
         verify2FABtn.removeAttribute('disabled');
-        verify2FABtn.textContent = 'Verify';
+        verify2FABtn.textContent = t('verifyButton');
       }
     };
   }
@@ -338,10 +347,10 @@ export function renderLoginPage() {
     modal.innerHTML = `
       <div class="max-w-md w-full bg-white/5 backdrop-blur-lg border border-white/20 rounded-2xl p-6 text-white">
         <h3 id="regModalTitle" class="text-2xl font-semibold mb-2">
-          ${isAuthApp ? 'Set up Authenticator App' : 'Verify Your Email'}
+          ${isAuthApp ? t('totpSetupTitle') : t('emailVerifyTitle')}
         </h3>
         <p id="regModalMessage" class="text-sm text-cyan-200 mb-4">
-          ${isAuthApp ? 'Scan the image below with your authenticator app, then click "Complete Registration".' : 'To complete registration, please enter the code sent to your email.'}
+          ${isAuthApp ? t('totpSetupDescription') : t('emailVerifyDescription')}
         </p>
 
         ${isAuthApp ? `
@@ -350,9 +359,9 @@ export function renderLoginPage() {
             <canvas id="qrCanvas"></canvas>
           </div>
           <div id="totpSecretWrapper" class="mb-4">
-            <label class="text-xs text-cyan-200 block mb-2">Or enter this secret key manually:</label>
+            <label class="text-xs text-cyan-200 block mb-2">${t('secretLabel')}</label>
             <div class="bg-black/50 border border-cyan-500/60 rounded-xl px-4 py-3 text-white break-words">
-              ${verificationData.secret || 'Error: No secret key provided.'}
+              ${verificationData.secret || t('missingSecretKey')}
             </div>
           </div>
           <div id="regCodeError" class="text-sm text-red-400 mb-2 min-h-[1.25rem]"></div>
@@ -360,11 +369,11 @@ export function renderLoginPage() {
           <!-- Email Verification Input -->
           <div id="emailVerificationContent">
             <div class="mb-4">
-              <input id="regCodeInput" type="text" maxlength="6" placeholder="Enter verification code"
+              <input id="regCodeInput" type="text" maxlength="6" placeholder="${t('regCodePlaceholder')}"
                      class="w-full bg-black/50 border border-cyan-500/60 rounded-xl px-4 py-3 text-white focus:outline-none" />
             </div>
             <div class="flex items-center justify-between">
-               <button id="resendRegCodeBtn" class="text-sm text-cyan-200 underline">Resend code</button>
+               <button id="resendRegCodeBtn" class="text-sm text-cyan-200 underline">${t('resendCode')}</button>
                <div id="regCodeError" class="text-sm text-red-400"></div>
             </div>
           </div>
@@ -372,11 +381,11 @@ export function renderLoginPage() {
 
         <div id="regModalButtons" class="flex gap-3 mt-4">
           ${isAuthApp ? `
-            <button id="completeRegBtn" class="flex-1 py-2 bg-gradient-to-r from-purple-500 to-pink-600 rounded-xl font-bold">Complete Registration</button>
-            <button id="dismissRegCodeBtn" class="flex-1 py-2 bg-gray-800/40 rounded-xl">Cancel</button>
+            <button id="completeRegBtn" class="flex-1 py-2 bg-gradient-to-r from-purple-500 to-pink-600 rounded-xl font-bold">${t('completeRegistration')}</button>
+            <button id="dismissRegCodeBtn" class="flex-1 py-2 bg-gray-800/40 rounded-xl">${t('cancelButton')}</button>
           ` : `
-            <button id="verifyRegCodeBtn" class="flex-1 py-2 bg-gradient-to-r from-purple-500 to-pink-600 rounded-xl font-bold">Verify & Register</button>
-            <button id="dismissRegCodeBtn" class="flex-1 py-2 bg-gray-800/40 rounded-xl">Cancel</button>
+            <button id="verifyRegCodeBtn" class="flex-1 py-2 bg-gradient-to-r from-purple-500 to-pink-600 rounded-xl font-bold">${t('verifyRegisterButton')}</button>
+            <button id="dismissRegCodeBtn" class="flex-1 py-2 bg-gray-800/40 rounded-xl">${t('cancelButton')}</button>
           `}
         </div>
       </div>
@@ -416,12 +425,12 @@ export function renderLoginPage() {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          throw new Error(data.error || 'Final registration step failed.');
+          throw new Error(data.error || t('finalRegistrationError'));
         }
 
         // Success
-        titleH3.textContent = 'Registration Complete!';
-        messageP.textContent = 'Your account has been created. You can now log in.';
+        titleH3.textContent = t('registrationCompleteTitle');
+        messageP.textContent = t('registrationCompleteMessage');
         if (document.getElementById('emailVerificationContent')) {
           document.getElementById('emailVerificationContent')!.innerHTML = '';
         }
@@ -430,7 +439,7 @@ export function renderLoginPage() {
         const secretWrapper = document.getElementById('totpSecretWrapper');
         if (secretWrapper) secretWrapper.remove();
         buttonsDiv.innerHTML = `
-          <button id="proceedToLoginBtn" class="w-full py-2 bg-gradient-to-r from-purple-500 to-pink-600 rounded-xl font-bold">Proceed to Login</button>
+          <button id="proceedToLoginBtn" class="w-full py-2 bg-gradient-to-r from-purple-500 to-pink-600 rounded-xl font-bold">${t('proceedToLogin')}</button>
         `;
         const proceedBtn = document.getElementById('proceedToLoginBtn') as HTMLButtonElement;
         proceedBtn.onclick = () => {
@@ -450,20 +459,20 @@ export function renderLoginPage() {
         QRCode.toCanvas(canvas, verificationData.otpauth_url, { width: 256, margin: 1 }, (error) => {
           if (error) {
             console.error('QR Code generation failed:', error);
-            canvas.parentElement!.innerHTML = `<p class="text-red-400">Could not generate QR code.</p>`;
+            canvas.parentElement!.innerHTML = `<p class="text-red-400">${t('qrGenerationFailed')}</p>`;
           }
         });
       }
       const completeBtn = document.getElementById('completeRegBtn') as HTMLButtonElement;
       completeBtn.onclick = async () => {
-        completeBtn.textContent = 'Completing...';
+        completeBtn.textContent = t('completingText');
         completeBtn.disabled = true;
         try {
           // For TOTP, we pass the original verification token.
           // The backend should verify that the user has a TOTP secret associated with this token.
           await handleFinalRegistration({ verificationToken: verificationData.verificationToken });
         } catch (err) {
-          completeBtn.textContent = 'Complete Registration';
+          completeBtn.textContent = t('completeRegistration');
           completeBtn.disabled = false;
         }
       };
@@ -475,7 +484,7 @@ export function renderLoginPage() {
 
       const sendCode = async () => {
         try {
-          resendBtn.textContent = 'Sending...';
+          resendBtn.textContent = t('sendingText');
           resendBtn.disabled = true;
           const res = await fetch(`${API_URL_2FA}/auth/2fa/register/initiate`, {
             method: 'POST',
@@ -484,24 +493,24 @@ export function renderLoginPage() {
             body: JSON.stringify({ email: userData.email, authType: 'email' })
           });
           const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error || 'Failed to resend code');
+          if (!res.ok) throw new Error(data.error || t('resendCodeError'));
           
           verificationData.verificationToken = data.verificationToken; // Update token on resend
-          messageP.textContent = 'A new code has been sent to your email.';
+          messageP.textContent = t('resendSuccessMessage');
           
           let cooldown = 30;
           const interval = setInterval(() => {
             cooldown -= 1;
-            resendBtn.textContent = `Resend (${cooldown}s)`;
+            resendBtn.textContent = `${t('codeResendCooldown')} (${cooldown}s)`;
             if (cooldown <= 0) {
               clearInterval(interval);
               resendBtn.disabled = false;
-              resendBtn.textContent = 'Resend code';
+              resendBtn.textContent = t('resendCode');
             }
           }, 1000);
         } catch (err) {
           resendBtn.disabled = false;
-          resendBtn.textContent = 'Resend code';
+          resendBtn.textContent = t('resendCode');
           setRegError((err as Error).message);
         }
       };
@@ -514,11 +523,11 @@ export function renderLoginPage() {
       verifyBtn.onclick = async () => {
         const code = regCodeInput.value.trim();
         if (!code) {
-          setRegError('Please enter the code.');
+          setRegError(t('codeInputRequired'));
           return;
         }
         try {
-          verifyBtn.textContent = 'Verifying...';
+          verifyBtn.textContent = t('verifyingText');
           verifyBtn.disabled = true;
           const res = await fetch(`${API_URL_2FA}/auth/2fa/register/verify`, {
             method: 'POST',
@@ -528,7 +537,7 @@ export function renderLoginPage() {
           });
           if (!res.ok) {
             const err = await res.json().catch(() => ({}));
-            throw new Error(err.error || 'Verification failed');
+            throw new Error(err.error || t('verificationFailed'));
           }
           const finalVerificationData = await res.json();
 
@@ -537,7 +546,7 @@ export function renderLoginPage() {
         } catch (err) {
           setRegError((err as Error).message);
           verifyBtn.disabled = false;
-          verifyBtn.textContent = 'Verify & Register';
+          verifyBtn.textContent = t('verifyRegisterButton');
         }
       };
     }
@@ -558,7 +567,7 @@ export function renderLoginPage() {
 
       if (!res.ok) {
         const error = await res.json().catch(() => ({}));
-        throw new Error(error.error || 'Login failed');
+        throw new Error(error.error || t('loginFailed'));
       }
 
       const data = await res.json();
@@ -677,11 +686,11 @@ export function renderLoginPage() {
 
       const verificationData = await initiateRes.json().catch(() => ({}));
       if (!initiateRes.ok) {
-        throw new Error(verificationData.error || 'Could not start registration process.');
+        throw new Error(verificationData.error || t('registrationStartError'));
       }
 
       if (!verificationData.verificationToken) {
-        throw new Error('Missing verification token from server.');
+        throw new Error(t('missingVerificationToken'));
       }
 
       // Step 2: Show the appropriate modal for code entry or QR scan.
