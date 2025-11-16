@@ -22,6 +22,7 @@ const HmTranslation = {
     subtitle: "Zagraj ze swoim przeciwnikiem w futurystycznej arenie.",
     startgameGuest: "Graj jako gość",
     startGameProfile: "Graj z profilem",
+    login : "zaloguj się",
     controls: "Sterowanie",
     language: "Język"
   },
@@ -30,6 +31,7 @@ const HmTranslation = {
     subtitle: "Desafía a tu oponente en una arena futurista para 2 jugadores.",
     startgameGuest: "Jugar como invitado",
     startGameProfile: "Jugar con perfil",
+    login : "iniciar sesión",
     controls: "Controles",
     language: "Idioma"
   }
