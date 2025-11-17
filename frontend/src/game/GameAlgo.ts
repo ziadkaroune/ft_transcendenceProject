@@ -45,31 +45,14 @@ export function startGame(
       break;
   }
 
-  /** 🧱 SCENE SETUP **/
-  let scoreDiv = document.getElementById('scoreDisplay');
-  if (!scoreDiv) {
-    scoreDiv = document.createElement('div');
-    scoreDiv.id = 'scoreDisplay';
-    Object.assign(scoreDiv.style, {
-      position: 'absolute',
-      top: '10px',
-      left: '50%',
-      transform: 'translateX(-50%)',
-      color: 'white',
-      fontSize: '24px',
-      fontFamily: 'Arial, sans-serif',
-      pointerEvents: 'none',
-      zIndex: '9999',
-    });
-    const gameContainer = document.getElementById('app') || document.body;
-    gameContainer.appendChild(scoreDiv);
-  }
-
   const engine = new BABYLON.Engine(canvas, true);
   const scene = new BABYLON.Scene(engine);
   const camera = new BABYLON.FreeCamera('camera', new BABYLON.Vector3(0, 0, -100), scene);
   camera.setTarget(BABYLON.Vector3.Zero());
   new BABYLON.HemisphericLight('light', new BABYLON.Vector3(0, 1, 0), scene);
+  // Add a subtle glow bloom to make emissive materials pop
+  const glow = new BABYLON.GlowLayer('glow', scene, { blurKernelSize: 48 });
+  glow.intensity = 0.55;
 
   const WIN_SCORE = settings.winScore;
   const BALL_SPEED = settings.ballSpeed;
@@ -79,6 +62,74 @@ export function startGame(
   const fieldHeight = 60;
   const paddleSize = { width: 3, height: 14, depth: 2 };
   const ballSize = 4;
+
+  const scoreboardHost = document.getElementById('app') || document.body;
+  let scoreDiv = document.getElementById('scoreDisplay') as HTMLDivElement | null;
+  let leftScoreValueEl: HTMLSpanElement | null = null;
+  let rightScoreValueEl: HTMLSpanElement | null = null;
+
+  function mountScoreboard() {
+    if (!scoreDiv) {
+      scoreDiv = document.createElement('div');
+      scoreDiv.id = 'scoreDisplay';
+    }
+
+    scoreDiv.className = 'game-scoreboard';
+    scoreDiv.innerHTML = '';
+    scoreDiv.setAttribute('role', 'status');
+    scoreDiv.setAttribute('aria-live', 'polite');
+
+    const panel = document.createElement('div');
+    panel.className = 'game-scoreboard-panel';
+
+    const leftPlayer = document.createElement('div');
+    leftPlayer.className = 'game-scoreboard-player';
+    const leftLabel = document.createElement('span');
+    leftLabel.className = 'game-scoreboard-label';
+    leftLabel.textContent = 'Player One';
+    const leftName = document.createElement('span');
+    leftName.className = 'game-scoreboard-name';
+    leftName.textContent = p1;
+    leftPlayer.append(leftLabel, leftName);
+
+    const scoresGroup = document.createElement('div');
+    scoresGroup.className = 'game-scoreboard-scores';
+    const leftScoreSpan = document.createElement('span');
+    leftScoreSpan.className = 'game-scoreboard-score';
+    leftScoreSpan.textContent = '00';
+    const divider = document.createElement('span');
+    divider.className = 'game-scoreboard-divider';
+    divider.textContent = ':';
+    const rightScoreSpan = document.createElement('span');
+    rightScoreSpan.className = 'game-scoreboard-score';
+    rightScoreSpan.textContent = '00';
+    scoresGroup.append(leftScoreSpan, divider, rightScoreSpan);
+
+    const rightPlayer = document.createElement('div');
+    rightPlayer.className = 'game-scoreboard-player game-scoreboard-player--right';
+    const rightLabel = document.createElement('span');
+    rightLabel.className = 'game-scoreboard-label';
+    rightLabel.textContent = isAIMatch ? 'AI Opponent' : 'Player Two';
+    const rightName = document.createElement('span');
+    rightName.className = 'game-scoreboard-name';
+    rightName.textContent = p2;
+    rightPlayer.append(rightLabel, rightName);
+
+    panel.append(leftPlayer, scoresGroup, rightPlayer);
+
+    const subtext = document.createElement('p');
+    subtext.className = 'game-scoreboard-subtext';
+    const descriptor = isAIMatch ? 'AI showdown' : 'Head-to-head battle';
+    subtext.textContent = `First to ${WIN_SCORE} | ${descriptor}`;
+
+    scoreDiv.append(panel, subtext);
+    scoreboardHost.appendChild(scoreDiv);
+
+    leftScoreValueEl = leftScoreSpan;
+    rightScoreValueEl = rightScoreSpan;
+  }
+
+  mountScoreboard();
 
   // --- Background ---
   const ground = BABYLON.MeshBuilder.CreateGround(
@@ -90,17 +141,66 @@ export function startGame(
   groundMat.diffuseColor = new BABYLON.Color3(0.05, 0.05, 0.1);
   ground.material = groundMat;
 
-  // --- Paddles ---
-  const paddleMat = new BABYLON.StandardMaterial('paddleMat', scene);
-  paddleMat.emissiveColor = new BABYLON.Color3(0.2, 1.0, 1.0);
-  paddleMat.specularColor = new BABYLON.Color3(0.8, 0.8, 1);
+  // --- Paddles (glowing block look) ---
+  function buildGlowingBlockPaddle(base: BABYLON.AbstractMesh, color: BABYLON.Color3) {
+    // Base is just a transform holder for physics and positioning
+    base.isVisible = false;
 
+    const holder = new BABYLON.TransformNode(base.name + '-block-holder', scene);
+    holder.parent = base;
+
+    // Outer translucent shell to create a soft volumetric glow
+    const shell = BABYLON.MeshBuilder.CreateBox(base.name + '-shell', {
+      width: paddleSize.width,
+      height: paddleSize.height,
+      depth: paddleSize.depth,
+    }, scene);
+    shell.parent = holder;
+    shell.isPickable = false;
+    const shellMat = new BABYLON.StandardMaterial(base.name + '-shell-mat', scene);
+    shellMat.diffuseColor = color.scale(0.15);
+    shellMat.emissiveColor = color.scale(0.22);
+    shellMat.specularColor = new BABYLON.Color3(0.9, 0.9, 1);
+    shellMat.alpha = 0.42;
+    shell.material = shellMat;
+
+    // Inner bright core block that actually glows
+    const core = BABYLON.MeshBuilder.CreateBox(base.name + '-core', {
+      width: paddleSize.width * 0.72,
+      height: paddleSize.height * 0.92,
+      depth: paddleSize.depth * 0.72,
+    }, scene);
+    core.parent = holder;
+    core.isPickable = false;
+    const coreMat = new BABYLON.StandardMaterial(base.name + '-core-mat', scene);
+    coreMat.diffuseColor = color.scale(0.08);
+    coreMat.emissiveColor = color.clone();
+    coreMat.specularColor = new BABYLON.Color3(1, 1, 1);
+    // Rim emphasis to enhance 3D
+    coreMat.emissiveFresnelParameters = new BABYLON.FresnelParameters();
+    coreMat.emissiveFresnelParameters.bias = 0.18;
+    coreMat.emissiveFresnelParameters.power = 2.0;
+    core.material = coreMat;
+
+    // Gentle pulsating emissive to make it feel alive
+    const phase = Math.random() * Math.PI * 2;
+    scene.onBeforeRenderObservable.add(() => {
+      const t = performance.now() * 0.001;
+      const pulse = 0.85 + 0.15 * Math.sin(t * 1.2 + phase);
+      coreMat.emissiveColor = color.scale(pulse);
+      shellMat.emissiveColor = color.scale(0.18 * pulse);
+    });
+  }
+
+  // Base meshes (drivers for position) keep original dimensions for gameplay
   const paddleLeft = BABYLON.MeshBuilder.CreateBox('paddleLeft', paddleSize, scene);
   paddleLeft.position.x = -fieldWidth / 2 + 5;
-  paddleLeft.material = paddleMat;
-
-  const paddleRight = paddleLeft.clone('paddleRight');
+  const paddleRight = BABYLON.MeshBuilder.CreateBox('paddleRight', paddleSize, scene);
   paddleRight.position.x = fieldWidth / 2 - 5;
+
+  // Build glowing block visuals on both paddles
+  buildGlowingBlockPaddle(paddleLeft, new BABYLON.Color3(0.2, 0.95, 1.0));
+  buildGlowingBlockPaddle(paddleRight, new BABYLON.Color3(0.7, 0.3, 1.0));
 
   // --- Ball ---
   const ballMat = new BABYLON.StandardMaterial('ballMat', scene);
@@ -126,8 +226,12 @@ export function startGame(
   const keys: Record<string, boolean> = {};
 
   function updateScoreText() {
-    const display = document.getElementById('scoreDisplay');
-    if (display) display.textContent = `${p1} ${leftScore} : ${rightScore} ${p2}`;
+    if (leftScoreValueEl) {
+      leftScoreValueEl.textContent = leftScore.toString().padStart(2, '0');
+    }
+    if (rightScoreValueEl) {
+      rightScoreValueEl.textContent = rightScore.toString().padStart(2, '0');
+    }
   }
 
   function resetBall() {

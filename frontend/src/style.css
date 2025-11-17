@@ -26,3 +26,120 @@ body {
 .theme-forest {
   background: linear-gradient(to bottom, #2e7d32, #1b5e20);
 }
+
+/* Game scoreboard overlay */
+.game-scoreboard {
+  position: fixed;
+  top: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  width: min(90vw, 640px);
+  pointer-events: none;
+  z-index: 40;
+  font-family: 'Orbitron', sans-serif;
+}
+
+.game-scoreboard-panel {
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: clamp(0.75rem, 3vw, 3rem);
+  padding: 0.9rem 1.8rem;
+  border-radius: 999px;
+  border: 1px solid rgba(59, 130, 246, 0.6);
+  background: linear-gradient(135deg, rgba(12, 0, 36, 0.95), rgba(4, 14, 35, 0.85));
+  box-shadow: 0 12px 35px rgba(2, 6, 23, 0.8), 0 0 30px rgba(34, 211, 238, 0.45);
+  backdrop-filter: blur(18px);
+  overflow: hidden;
+}
+
+.game-scoreboard-panel::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  background: linear-gradient(120deg, rgba(34, 211, 238, 0.45), rgba(168, 85, 247, 0.4), rgba(59, 130, 246, 0.45));
+  filter: blur(18px);
+  opacity: 0.7;
+  z-index: -1;
+}
+
+.game-scoreboard-player {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.65rem;
+  color: #c7d2fe;
+}
+
+.game-scoreboard-player--right {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.game-scoreboard-name {
+  margin-top: 0.2rem;
+  font-size: clamp(1rem, 2vw, 1.35rem);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  background: linear-gradient(90deg, #22d3ee, #a855f7);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.game-scoreboard-scores {
+  display: flex;
+  align-items: center;
+  gap: clamp(0.6rem, 2vw, 1.5rem);
+}
+
+.game-scoreboard-score {
+  font-size: clamp(2rem, 4vw, 2.8rem);
+  font-weight: 800;
+  color: #7dd3fc;
+  text-shadow: 0 0 20px rgba(34, 211, 238, 0.65);
+}
+
+.game-scoreboard-divider {
+  font-size: clamp(1.5rem, 3vw, 2.2rem);
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.game-scoreboard-subtext {
+  font-size: 0.75rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.85);
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .game-scoreboard {
+    top: 1rem;
+  }
+
+  .game-scoreboard-panel {
+    flex-direction: column;
+    border-radius: 1.25rem;
+    padding: 1rem;
+  }
+
+  .game-scoreboard-player,
+  .game-scoreboard-player--right {
+    align-items: center;
+    text-align: center;
+  }
+
+  .game-scoreboard-subtext {
+    letter-spacing: 0.15em;
+  }
+}
