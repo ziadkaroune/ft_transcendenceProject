@@ -1,6 +1,20 @@
 import ProfileTranslations from '../languages/ProfileLanguages';
-localStorage
-const API_URL = 'http://localhost:3103';
+
+const isLocalhost = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+const DEFAULT_USERS_API_URL = isLocalhost
+  ? 'http://localhost:3103'
+  : window.location.origin.replace(/\/$/, '');
+const DEFAULT_MATCHES_API_URL = isLocalhost
+  ? 'http://localhost:3102'
+  : window.location.origin.replace(/\/$/, '');
+
+const API_URL =
+  (import.meta.env.VITE_USERS_API_URL as string | undefined) ??
+  DEFAULT_USERS_API_URL;
+const MATCHES_API_URL =
+  (import.meta.env.VITE_MATCHES_API_URL as string | undefined) ??
+  DEFAULT_MATCHES_API_URL;
+
 const DEFAULT_AVATAR_PATH = '/avatars/user.png';
 
 const escapeHtml = (value: string | number | null | undefined): string => {
@@ -696,6 +710,7 @@ export async function renderDashboardPage() {
       const res = await fetch(`${API_URL}/users/${user.id}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: payload
       });
 
@@ -719,7 +734,9 @@ export async function renderDashboardPage() {
     if (friendsCountBadge) friendsCountBadge.textContent = '--';
 
     try {
-      const res = await fetch(`${API_URL}/users/${user.id}/friends`);
+      const res = await fetch(`${API_URL}/users/${user.id}/friends`, {
+        credentials: 'include'
+      });
       const payload = await res.json().catch(() => null);
 
       if (!res.ok || !Array.isArray(payload)) {
@@ -787,6 +804,7 @@ export async function renderDashboardPage() {
       const res = await fetch(`${API_URL}/users/${user.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(payload)
       });
 
@@ -826,7 +844,10 @@ export async function renderDashboardPage() {
       deleteAccountBtn.setAttribute('disabled', 'true');
       deleteAccountBtn.classList.add('opacity-60', 'cursor-not-allowed');
 
-      const res = await fetch(`${API_URL}/users/${user.id}`, { method: 'DELETE' });
+      const res = await fetch(`${API_URL}/users/${user.id}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      });
       if (!res.ok) {
         const error = await res.json().catch(() => ({}));
         throw new Error(error.error || t('accountError'));
@@ -886,6 +907,7 @@ export async function renderDashboardPage() {
     try {
       const res = await fetch(`${API_URL}/users/${user.id}/avatar`, {
         method: 'POST',
+        credentials: 'include',
         body: formData
       });
       const payload = await res.json().catch(() => ({}));
@@ -944,6 +966,7 @@ export async function renderDashboardPage() {
       const res = await fetch(`${API_URL}/users/${user.id}/password`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           current_password: current,
           new_password: next
@@ -987,6 +1010,7 @@ export async function renderDashboardPage() {
       const res = await fetch(`${API_URL}/users/${user.id}/friends`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ friend_username: query })
       });
       const payload = await res.json().catch(() => ({}));
@@ -1025,6 +1049,7 @@ export async function renderDashboardPage() {
         const res = await fetch(`${API_URL}/users/${user.id}/friends/${friendId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({ action })
         });
         const payload = await res.json().catch(() => ({}));
@@ -1033,7 +1058,10 @@ export async function renderDashboardPage() {
         }
         message = payload.message || (action === 'accept' ? t('friendActionAccept') : t('friendActionDecline'));
       } else {
-        const res = await fetch(`${API_URL}/users/${user.id}/friends/${friendId}`, { method: 'DELETE' });
+        const res = await fetch(`${API_URL}/users/${user.id}/friends/${friendId}`, {
+          method: 'DELETE',
+          credentials: 'include'
+        });
         const payload = await res.json().catch(() => ({}));
         if (!res.ok) {
           throw new Error(payload.error || t('friendActionError'));
@@ -1061,7 +1089,9 @@ export async function renderDashboardPage() {
 
   const loadUserOverview = async () => {
     try {
-      const statsRes = await fetch(`${API_URL}/users/${user.id}`);
+      const statsRes = await fetch(`${API_URL}/users/${user.id}`, {
+        credentials: 'include'
+      });
       if (!statsRes.ok) {
         return;
       }
@@ -1203,7 +1233,7 @@ export async function renderDashboardPage() {
 
   // Load match history
   try {
-    const matchesRes = await fetch(`http://localhost:3102/matches/user/${user.id}`);
+    const matchesRes = await fetch(`${MATCHES_API_URL}/matches/user/${user.id}`);
     console.log('Match history response status:', matchesRes.status);
     
     if (matchesRes.ok) {
@@ -1218,10 +1248,12 @@ export async function renderDashboardPage() {
           historyDiv.innerHTML = matches.map((m: any) => {
             const isWinner = m.winner === user.username;
             const opponent = m.player1 === user.username ? m.player2 : m.player1;
+            const safeUser = escapeHtml(user.username);
+            const safeOpponent = escapeHtml(opponent);
             return `
               <div class="bg-black/30 rounded-lg p-4 flex justify-between items-center border ${isWinner ? 'border-green-500/50' : 'border-red-500/50'}">
                 <div>
-                  <p class="font-semibold">${user.username} ${t('vs')} ${opponent}</p>
+                  <p class="font-semibold">${safeUser} ${t('vs')} ${safeOpponent}</p>
                   <p class="text-sm text-gray-400">${new Date(m.played_at).toLocaleDateString()}</p>
                 </div>
                 <div class="text-right">
@@ -1249,7 +1281,10 @@ export async function renderDashboardPage() {
   document.getElementById('logoutBtn')?.addEventListener('click', async () => {
     try {
       await heartbeat('offline');
-      await fetch(`${API_URL}/auth/logout/${user.id}`, { method: 'POST' });
+      await fetch(`${API_URL}/auth/logout/${user.id}`, {
+        method: 'POST',
+        credentials: 'include'
+      });
     } catch (err) {
       console.error('Logout error:', err);
     }

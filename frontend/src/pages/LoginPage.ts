@@ -1,8 +1,20 @@
 import QRCode from 'qrcode';
 import LoginTranslations from '../languages/LoginLanguages';
 
-const API_URL = 'http://localhost:3103';
-const API_URL_2FA = 'http://localhost:3105';
+const isLocalhost = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+const DEFAULT_USERS_API_URL = isLocalhost
+  ? 'http://localhost:3103'
+  : window.location.origin.replace(/\/$/, '');
+const DEFAULT_2FA_API_URL = isLocalhost
+  ? 'http://localhost:3105'
+  : window.location.origin.replace(/\/$/, '');
+
+const API_URL =
+  (import.meta.env.VITE_USERS_API_URL as string | undefined) ??
+  DEFAULT_USERS_API_URL;
+const API_URL_2FA =
+  (import.meta.env.VITE_AUTH_API_URL as string | undefined) ??
+  DEFAULT_2FA_API_URL;
 const LOGIN_DEFAULT_LANG = 'eng';
 
 export function renderLoginPage() {
@@ -555,6 +567,14 @@ export function renderLoginPage() {
   // Login handler
   loginForm.onsubmit = async (e) => {
     e.preventDefault();
+
+    const isSecureContext = window.location.protocol === 'https:';
+    const isLocalEnv = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+    if (!isSecureContext && !isLocalEnv) {
+      showError(t('loginInsecureProtocolError'));
+      return;
+    }
+
     const email = (document.getElementById('loginEmail') as HTMLInputElement).value;
     const password = (document.getElementById('loginPassword') as HTMLInputElement).value;
 

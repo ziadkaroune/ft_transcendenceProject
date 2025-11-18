@@ -369,10 +369,9 @@ await fastify.register(rateLimit, {
 const token_map = new Map(); // userId -> { type: 'email'|'authApp', code?, secret?, validUntil?, failedAttempts?, lockoutUntil? }
 const registration_tokens = new Map(); // verificationToken -> { email, username, authType, code?, secret?, validUntil }
 
-// Utility: generate numeric code
 function generateNumericCode(length = 6) {
   const max = 10 ** length;
-  const num = Math.floor(Math.random() * max);
+  const num = crypto.randomInt(0, max);
   return String(num).padStart(length, '0');
 }
 
@@ -585,7 +584,6 @@ fastify.post('/auth/2fa/send', buildRateLimitRouteConfig(), async (request, repl
   const html = `<p>Your verification code is: <strong>${code}</strong></p><p>This code is valid for 10 minutes.</p>`;
   const plain = `Your verification code is: ${code}\nThis code is valid for 10 minutes.`;
 
-  // Try to send via Maileroo if configured. If not configured, fallback to logging and return code (dev).
   const fromAddress = process.env.MAILEROO_FROM || 'no-reply@example.com';
   const displayName = '2FA Server';
 
@@ -594,8 +592,7 @@ fastify.post('/auth/2fa/send', buildRateLimitRouteConfig(), async (request, repl
       if (!process.env.MAILEROO) {
         fastify.log.warn('MAILEROO env variable not set — logging code instead of sending email');
         fastify.log.info(`2FA email code for ${recipient}: ${code}`);
-        // In development, we return the code to make testing easier.
-        return reply.send({ success: true, method: 'console', code });
+        return reply.send({ success: true, method: 'console' });
       }
 
       fastify.log.info(`2FA code emailed to ${recipient} for user ${userId || email}`);
@@ -608,14 +605,12 @@ fastify.post('/auth/2fa/send', buildRateLimitRouteConfig(), async (request, repl
       return reply.status(500).send({
         success: false,
         error: 'Failed to send email',
-        details: err && err.message ? err.message : String(err),
-        code // still return code in dev to unblock login flows
+        details: err && err.message ? err.message : String(err)
       });
     }
   } else {
-    // No recipient known (we only have numeric userId). Log and return success with code for dev.
     fastify.log.info(`2FA code for user ${userId} generated: ${code} (no recipient email provided)`);
-    return reply.send({ success: true, method: 'console', code });
+    return reply.send({ success: true, method: 'console' });
   }
 });
 

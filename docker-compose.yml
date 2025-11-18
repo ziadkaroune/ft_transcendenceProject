@@ -63,6 +63,8 @@ services:
     restart: unless-stopped
     networks:
       - transcendence-network
+    env_file:
+      - ./.env
   
   auth-service:
     container_name: auth-microservice

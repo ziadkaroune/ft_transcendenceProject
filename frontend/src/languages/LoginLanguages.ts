@@ -49,7 +49,8 @@ const LoginTranslations = {
     registrationStartError: 'Could not start registration process.',
     finalRegistrationError: 'Final registration step failed.',
     missingVerificationToken: 'Missing verification token from server.',
-    resendSuccessMessage: 'A new code has been sent to your email.'
+    resendSuccessMessage: 'A new code has been sent to your email.',
+    loginInsecureProtocolError: 'Login is only allowed over HTTPS in production. Please use a secure connection.'
   },
   fr: {
     tabLogin: 'Connexion',
@@ -101,7 +102,8 @@ const LoginTranslations = {
     registrationStartError: 'Impossible de lancer le processus d’inscription.',
     finalRegistrationError: 'La dernière étape d’inscription a échoué.',
     missingVerificationToken: 'Jeton de vérification manquant.',
-    resendSuccessMessage: 'Un nouveau code a été envoyé sur votre e-mail.'
+    resendSuccessMessage: 'Un nouveau code a été envoyé sur votre e-mail.',
+    loginInsecureProtocolError: 'La connexion n’est autorisée que via HTTPS en production. Veuillez utiliser une connexion sécurisée.'
   },
   pl: {
     tabLogin: 'Zaloguj się',
@@ -153,7 +155,8 @@ const LoginTranslations = {
     registrationStartError: 'Nie udało się rozpocząć rejestracji.',
     finalRegistrationError: 'Ostatni krok rejestracji nie powiódł się.',
     missingVerificationToken: 'Brakuje tokena weryfikacyjnego.',
-    resendSuccessMessage: 'Nowy kod został wysłany na Twój e-mail.'
+    resendSuccessMessage: 'Nowy kod został wysłany na Twój e-mail.',
+    loginInsecureProtocolError: 'Logowanie jest dozwolone tylko przez HTTPS w środowisku produkcyjnym. Użyj bezpiecznego połączenia.'
   },
   es: {
     tabLogin: 'Iniciar sesión',
@@ -205,7 +208,8 @@ const LoginTranslations = {
     registrationStartError: 'No se pudo iniciar el registro.',
     finalRegistrationError: 'Falló el paso final del registro.',
     missingVerificationToken: 'Falta el token de verificación.',
-    resendSuccessMessage: 'Se envió un nuevo código a tu correo.'
+    resendSuccessMessage: 'Se envió un nuevo código a tu correo.',
+    loginInsecureProtocolError: 'El inicio de sesión solo está permitido mediante HTTPS en producción. Usa una conexión segura.'
   }
 } as const;
 
