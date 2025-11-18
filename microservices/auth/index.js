@@ -105,6 +105,7 @@ const SECRET_ENCRYPTION_KEY = (() => {
   const rawKey = process.env.TOTP_SECRET_KEY || JWT_SECRET;
   return crypto.createHash('sha256').update(String(rawKey)).digest();
 })();
+const COOKIE_LOG_FILE = process.env.COOKIE_LOG_FILE || '/app/logs/cookie-log.ndjson';
 
 const PRIMARY_AUTH_SERVICE_URL = process.env.PRIMARY_AUTH_SERVICE_URL || 'http://localhost:3103';
 const PRIMARY_AUTH_VERIFY_PATH = process.env.PRIMARY_AUTH_VERIFY_PATH || '/users';
@@ -235,6 +236,11 @@ if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 
+const cookieLogDir = path.dirname(COOKIE_LOG_FILE);
+if (!fs.existsSync(cookieLogDir)) {
+  fs.mkdirSync(cookieLogDir, { recursive: true });
+}
+
 let db;
 try {
   db = new Database(dbPath);
@@ -342,6 +348,19 @@ function buildRateLimitRouteConfig(max = SENSITIVE_RATE_LIMIT_MAX, timeWindow = 
   };
 }
 
+function appendCookieLog(entry) {
+  return new Promise((resolve, reject) => {
+    const line = `${JSON.stringify(entry)}\n`;
+    fs.appendFile(COOKIE_LOG_FILE, line, (err) => {
+      if (err) {
+        fastify.log.error({ err }, 'Failed to append cookie log entry');
+        return reject(err);
+      }
+      resolve();
+    });
+  });
+}
+
 // Register CORS
 await fastify.register(cors, {
   origin: true,
@@ -364,6 +383,28 @@ await fastify.register(rateLimit, {
     message: 'Rate limit exceeded. Please wait before retrying.',
     retryAfter: Math.ceil(context.ttl / 1000)
   })
+});
+
+fastify.addHook('onRequest', async (request) => {
+  const rawCookieHeader = request.headers.cookie || null;
+  fastify.log.info({ cookies: rawCookieHeader }, 'Incoming request cookies');
+});
+
+fastify.post('/diagnostics/cookie-log', async (request, reply) => {
+  try {
+    const { timestamp, method, target, cookies } = request.body || {};
+    const entry = {
+      timestamp: timestamp || new Date().toISOString(),
+      method: method || request.method,
+      target: target || request.headers['x-forwarded-url'] || request.url,
+      cookies: cookies ?? request.headers.cookie ?? ''
+    };
+
+    await appendCookieLog(entry);
+    return reply.send({ success: true });
+  } catch (err) {
+    return reply.status(500).send({ error: 'Failed to write cookie log entry' });
+  }
 });
 
 const token_map = new Map(); // userId -> { type: 'email'|'authApp', code?, secret?, validUntil?, failedAttempts?, lockoutUntil? }
@@ -510,12 +551,26 @@ fastify.post('/auth/2fa/register/verify', buildRateLimitRouteConfig(), async (re
     return reply.status(400).send({ error: 'Verification token expired' });
   }
 
-  if (entry.authType === 'email' && entry.code === String(code).trim()) {
+  const normalizedCode = String(code).trim();
+
+  if (entry.authType === 'email' && entry.code === normalizedCode) {
     // For email, the code is one-time. We can now consider it verified.
-    // The user service will consume this token.
     entry.verified = true;
     registration_tokens.set(verificationToken, entry);
     fastify.log.info(`Registration for ${entry.email} verified successfully.`);
+    return reply.send({ verificationToken });
+  }
+
+  if (entry.authType === 'authApp') {
+    if (!entry.secret) {
+      return reply.status(400).send({ error: 'Missing authenticator secret for this token' });
+    }
+    if (!verifyTOTP(entry.secret, normalizedCode, 1, 6, 30)) {
+      return reply.status(400).send({ error: 'Invalid code' });
+    }
+    entry.verified = true;
+    registration_tokens.set(verificationToken, entry);
+    fastify.log.info(`Authenticator setup for ${entry.email} validated successfully.`);
     return reply.send({ verificationToken });
   }
 
@@ -540,6 +595,9 @@ fastify.post('/auth/2fa/register/complete', buildRateLimitRouteConfig(), async (
   }
 
   if (entry.authType === 'authApp') {
+    if (!entry.verified) {
+      return reply.status(400).send({ error: 'Authenticator code has not been verified yet' });
+    }
     if (!entry.secret) {
       return reply.status(400).send({ error: 'Missing authenticator secret for this token' });
     }

@@ -376,6 +376,12 @@ export function renderLoginPage() {
               ${verificationData.secret || t('missingSecretKey')}
             </div>
           </div>
+          <div class="mb-4">
+            <label class="text-xs text-cyan-200 block mb-2">${t('totpCodeLabel')}</label>
+            <input id="totpCodeInput" type="text" inputmode="numeric" maxlength="6" pattern="[0-9]*" placeholder="${t('twoFACodePlaceholder')}"
+                   class="w-full bg-black/50 border border-cyan-500/60 rounded-xl px-4 py-3 text-white focus:outline-none" />
+            <p class="text-xs text-cyan-200 mt-2">${t('totpVerifyHelper')}</p>
+          </div>
           <div id="regCodeError" class="text-sm text-red-400 mb-2 min-h-[1.25rem]"></div>
         ` : `
           <!-- Email Verification Input -->
@@ -458,9 +464,66 @@ export function renderLoginPage() {
           modal.remove();
           loginTab.click();
         };
+
+        return data;
       } catch (err) {
         setRegError((err as Error).message);
-        return Promise.reject(err);
+        throw err;
+      }
+    };
+
+    const attemptAutoLoginAfterRegistration = async (totpCode: string) => {
+      if (!totpCode || !userData.email || !userData.password) {
+        return false;
+      }
+      try {
+        const loginRes = await fetch(`${API_URL}/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: userData.email, password: userData.password })
+        });
+        const loginPayload = await loginRes.json().catch(() => ({}));
+        if (!loginRes.ok) {
+          return false;
+        }
+        const loginUser = loginPayload.user || loginPayload;
+        const issuedSession = loginPayload.sessionIssued || loginPayload.success || loginPayload.token;
+        const resolvedUserId = (loginUser && (loginUser.id || loginUser.userId || loginUser.ID)) || userData.email;
+
+        if (issuedSession && loginUser) {
+          localStorage.setItem('user', JSON.stringify(loginUser));
+          localStorage.setItem('userId', String(resolvedUserId));
+          localStorage.setItem('username', loginUser.username || loginUser.display_name || userData.username || '');
+          history.pushState({}, '', '/dashboard');
+          window.dispatchEvent(new PopStateEvent('popstate'));
+          return true;
+        }
+
+        const verifyRes = await fetch(`${API_URL_2FA}/auth/2fa/verify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ userId: resolvedUserId, code: totpCode })
+        });
+        if (!verifyRes.ok) {
+          return false;
+        }
+        const verifyPayload = await verifyRes.json().catch(() => ({}));
+        const verifiedUser = verifyPayload.user || loginUser;
+        if (verifiedUser) {
+          localStorage.setItem('user', JSON.stringify(verifiedUser));
+          localStorage.setItem('userId', String(verifiedUser.id || resolvedUserId));
+          localStorage.setItem('username', verifiedUser.username || verifiedUser.display_name || userData.username || '');
+        }
+        localStorage.setItem('mode', 'profile-singleplayer');
+        localStorage.setItem('waazabi', 'true');
+        modal.remove();
+        history.pushState({}, '', '/dashboard');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        return true;
+      } catch (err) {
+        console.warn('Auto login after registration failed', err);
+        return false;
       }
     };
 
@@ -475,17 +538,35 @@ export function renderLoginPage() {
           }
         });
       }
+      const totpInput = document.getElementById('totpCodeInput') as HTMLInputElement;
       const completeBtn = document.getElementById('completeRegBtn') as HTMLButtonElement;
       completeBtn.onclick = async () => {
-        completeBtn.textContent = t('completingText');
+        const code = (totpInput?.value || '').trim();
+        if (!code) {
+          setRegError(t('codeInputRequired'));
+          return;
+        }
+        completeBtn.textContent = t('verifyingText');
         completeBtn.disabled = true;
         try {
-          // For TOTP, we pass the original verification token.
-          // The backend should verify that the user has a TOTP secret associated with this token.
-          await handleFinalRegistration({ verificationToken: verificationData.verificationToken });
+          const res = await fetch(`${API_URL_2FA}/auth/2fa/register/verify`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ verificationToken: verificationData.verificationToken, code })
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || t('verificationFailed'));
+          }
+          const finalVerificationData = await res.json();
+          completeBtn.textContent = t('completingText');
+          await handleFinalRegistration(finalVerificationData);
+          await attemptAutoLoginAfterRegistration(code);
         } catch (err) {
           completeBtn.textContent = t('completeRegistration');
           completeBtn.disabled = false;
+          setRegError((err as Error).message);
         }
       };
     } else {
