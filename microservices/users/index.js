@@ -8,6 +8,7 @@ import fs from 'fs';
 import multipart from '@fastify/multipart';
 import { pipeline } from 'stream/promises';
 import { fileURLToPath } from 'url';
+import jwt from 'jsonwebtoken';
 
 const fastify = Fastify({ logger: true });
 const PORT = process.env.PORT || 3103;
@@ -22,7 +23,70 @@ const RATE_LIMIT_ALLOW_LIST = (process.env.RATE_LIMIT_ALLOW_LIST || '')
   .map((value) => value.trim())
   .filter(Boolean);
 
+const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'ft_transcendence.clients';
+const JWT_ISSUER = process.env.JWT_ISSUER || 'ft_transcendence.auth';
+const JWT_COOKIE_NAME = process.env.JWT_COOKIE_NAME || 'ft_session';
+
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  throw new Error('JWT_SECRET must be defined and at least 32 characters long for users-service.');
+}
+
 const nowIso = () => new Date().toISOString();
+
+function parseCookies(header) {
+  if (!header || typeof header !== 'string') return {};
+  return header.split(';').reduce((acc, part) => {
+    const [name, ...rest] = part.trim().split('=');
+    if (!name) return acc;
+    acc[name] = rest.join('=').trim();
+    return acc;
+  }, {});
+}
+
+function getAuthenticatedUserId(request) {
+  const cookies = parseCookies(request.headers?.cookie || request.headers?.Cookie || '');
+  const token = cookies[JWT_COOKIE_NAME];
+  if (!token) {
+    return null;
+  }
+
+  try {
+    const payload = jwt.verify(token, JWT_SECRET, {
+      audience: JWT_AUDIENCE,
+      issuer: JWT_ISSUER
+    });
+    if (typeof payload !== 'object' || !payload.sub) {
+      return null;
+    }
+    const id = Number(payload.sub);
+    return Number.isNaN(id) ? null : id;
+  } catch (err) {
+    fastify.log.warn({ err }, 'Failed to verify JWT for users-service');
+    return null;
+  }
+}
+
+function requireSameUser(request, reply) {
+  const targetId = Number(request.params?.id);
+  if (!Number.isFinite(targetId)) {
+    reply.code(400).send({ error: 'Invalid user id' });
+    return null;
+  }
+
+  const authId = getAuthenticatedUserId(request);
+  if (!authId) {
+    reply.code(401).send({ error: 'Authentication required' });
+    return null;
+  }
+
+  if (authId !== targetId) {
+    reply.code(403).send({ error: 'Forbidden' });
+    return null;
+  }
+
+  return authId;
+}
 
 // Initialize SQLite database
 const dbPath = '/app/database/users.db';
@@ -163,7 +227,8 @@ db.exec(`
 // Register CORS
 await fastify.register(cors, {
   origin: true,
-  methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH', 'OPTIONS']
+  methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH', 'OPTIONS'],
+  credentials: true
 });
 
 await fastify.register(rateLimit, {
@@ -368,7 +433,10 @@ fastify.post('/users', async (request, reply) => {
 
 // Update user profile
 fastify.patch('/users/:id', async (request, reply) => {
-  const { id } = request.params;
+  const selfId = requireSameUser(request, reply);
+  if (selfId === null) return;
+
+  const id = String(selfId);
   const { display_name, avatar_url, status, username, email } = request.body;
 
   try {
@@ -456,7 +524,10 @@ fastify.patch('/users/:id', async (request, reply) => {
 
 // Update user presence status
 fastify.post('/users/:id/status', async (request, reply) => {
-  const { id } = request.params;
+  const selfId = requireSameUser(request, reply);
+  if (selfId === null) return;
+
+  const id = String(selfId);
   const { status } = request.body ?? {};
 
   const normalizedStatus = typeof status === 'string' ? status.trim().toLowerCase() : 'online';
@@ -486,7 +557,10 @@ fastify.post('/users/:id/status', async (request, reply) => {
 
 // Update user password
 fastify.patch('/users/:id/password', async (request, reply) => {
-  const { id } = request.params;
+  const selfId = requireSameUser(request, reply);
+  if (selfId === null) return;
+
+  const id = String(selfId);
   const { current_password, new_password } = request.body ?? {};
 
   if (!new_password || typeof new_password !== 'string' || new_password.length < 8) {
@@ -533,7 +607,10 @@ fastify.patch('/users/:id/password', async (request, reply) => {
 
 // Update user stats (after a match)
 fastify.patch('/users/:id/stats', async (request, reply) => {
-  const { id } = request.params;
+  const selfId = requireSameUser(request, reply);
+  if (selfId === null) return;
+
+  const id = String(selfId);
   const { won, experience_gained } = request.body;
 
   try {
@@ -572,7 +649,10 @@ fastify.patch('/users/:id/stats', async (request, reply) => {
 
 // Get user's friends and requests
 fastify.get('/users/:id/friends', async (request, reply) => {
-  const { id } = request.params;
+  const selfId = requireSameUser(request, reply);
+  if (selfId === null) return;
+
+  const id = String(selfId);
   
   try {
     const friends = db.prepare(`
@@ -607,7 +687,10 @@ fastify.get('/users/:id/friends', async (request, reply) => {
 
 // Send or auto-accept friend requests
 fastify.post('/users/:id/friends', async (request, reply) => {
-  const { id } = request.params;
+  const selfId = requireSameUser(request, reply);
+  if (selfId === null) return;
+
+  const id = String(selfId);
   const { friend_id, friend_username } = request.body ?? {};
 
   try {
@@ -714,14 +797,17 @@ fastify.post('/users/:id/friends', async (request, reply) => {
 
 // Accept or reject friend requests
 fastify.patch('/users/:id/friends/:friendId', async (request, reply) => {
-  const { id, friendId } = request.params;
+  const selfId = requireSameUser(request, reply);
+  if (selfId === null) return;
+
+  const { friendId } = request.params;
   const { action } = request.body ?? {};
 
   if (!['accept', 'reject'].includes(action)) {
     return reply.code(400).send({ error: 'Invalid action' });
   }
 
-  const userId = Number(id);
+  const userId = Number(selfId);
   const targetId = Number(friendId);
   if (Number.isNaN(userId) || Number.isNaN(targetId)) {
     return reply.code(400).send({ error: 'Invalid identifier' });
@@ -766,9 +852,12 @@ fastify.patch('/users/:id/friends/:friendId', async (request, reply) => {
 
 // Remove friend or cancel request
 fastify.delete('/users/:id/friends/:friendId', async (request, reply) => {
-  const { id, friendId } = request.params;
+  const selfId = requireSameUser(request, reply);
+  if (selfId === null) return;
 
-  const userId = Number(id);
+  const { friendId } = request.params;
+
+  const userId = Number(selfId);
   const targetId = Number(friendId);
   if (Number.isNaN(userId) || Number.isNaN(targetId)) {
     return reply.code(400).send({ error: 'Invalid identifier' });
@@ -804,7 +893,10 @@ fastify.delete('/users/:id/friends/:friendId', async (request, reply) => {
 
 // Delete user
 fastify.delete('/users/:id', async (request, reply) => {
-  const { id } = request.params;
+  const selfId = requireSameUser(request, reply);
+  if (selfId === null) return;
+
+  const id = String(selfId);
 
   try {
     const result = db.prepare('DELETE FROM users WHERE id = ?').run(id);
@@ -881,7 +973,10 @@ fastify.post('/auth/login', buildRateLimitRouteConfig(), async (request, reply) 
 
 // Restore missing endpoints and startup
 fastify.post('/auth/logout/:id', async (request, reply) => {
-  const { id } = request.params;
+  const selfId = requireSameUser(request, reply);
+  if (selfId === null) return;
+
+  const id = String(selfId);
   try {
     db.prepare(`
       UPDATE users
@@ -896,7 +991,10 @@ fastify.post('/auth/logout/:id', async (request, reply) => {
 });
 
 fastify.post('/users/:id/avatar', async (request, reply) => {
-  const { id } = request.params;
+  const selfId = requireSameUser(request, reply);
+  if (selfId === null) return;
+
+  const id = String(selfId);
   try {
     const user = db.prepare('SELECT id FROM users WHERE id = ?').get(id);
     if (!user) return reply.code(404).send({ error: 'User not found' });
@@ -904,6 +1002,17 @@ fastify.post('/users/:id/avatar', async (request, reply) => {
     const data = await request.file();
     if (!data || !data.filename) {
       return reply.code(400).send({ error: 'No file uploaded' });
+    }
+
+    const allowedMimeTypes = new Set([
+      'image/png',
+      'image/jpeg',
+      'image/jpg',
+      'image/gif',
+      'image/webp'
+    ]);
+    if (!allowedMimeTypes.has(data.mimetype)) {
+      return reply.code(400).send({ error: 'Unsupported file type. Please upload an image.' });
     }
 
     const safeName = data.filename.replace(/[^a-zA-Z0-9.\-_]/g, '_');

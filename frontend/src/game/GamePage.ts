@@ -1,6 +1,47 @@
 import { startGame } from './GameAlgo';
 import ProfileTranslations from '../languages/ProfileLanguages';
 
+const isLocalhost = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+const DEFAULT_PLAYERS_API_URL = isLocalhost
+  ? 'http://localhost:3101'
+  : window.location.origin.replace(/\/$/, '');
+const DEFAULT_MATCHES_API_URL = isLocalhost
+  ? 'http://localhost:3102'
+  : window.location.origin.replace(/\/$/, '');
+const DEFAULT_USERS_API_URL = isLocalhost
+  ? 'http://localhost:3103'
+  : window.location.origin.replace(/\/$/, '');
+
+const PLAYERS_API_URL =
+  (import.meta.env.VITE_PLAYERS_API_URL as string | undefined) ??
+  DEFAULT_PLAYERS_API_URL;
+const MATCHES_API_URL =
+  (import.meta.env.VITE_MATCHES_API_URL as string | undefined) ??
+  DEFAULT_MATCHES_API_URL;
+const USERS_API_URL =
+  (import.meta.env.VITE_USERS_API_URL as string | undefined) ??
+  DEFAULT_USERS_API_URL;
+
+const escapeHtml = (value: string | number | null | undefined): string => {
+  if (value === null || value === undefined) return '';
+  return String(value).replace(/[&<>"']/g, (char) => {
+    switch (char) {
+      case '&':
+        return '&amp;';
+      case '<':
+        return '&lt;';
+      case '>':
+        return '&gt;';
+      case '"':
+        return '&quot;';
+      case '\'':
+        return '&#39;';
+      default:
+        return char;
+    }
+  });
+};
+
 /** Types */
 type GameSettings = {
   mode: string;
@@ -11,7 +52,7 @@ type GameSettings = {
 
 /** Fetch players from backend */
 async function getAliasQueue(): Promise<string[]> {
-  const res = await fetch('http://localhost:3101/players');
+  const res = await fetch(`${PLAYERS_API_URL}/players`);
   const data = await res.json();
 
   const queue = Array.isArray(data)
@@ -66,8 +107,8 @@ async function saveMatch(winner: string, p1: string, p2: string) {
   }
   
   console.log('Match data being saved:', matchData);
-  
-  const res = await fetch('http://localhost:3102/matches', {
+
+  const res = await fetch(`${MATCHES_API_URL}/matches`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(matchData),
@@ -87,9 +128,10 @@ async function saveMatch(winner: string, p1: string, p2: string) {
     console.log('Updating stats for user:', user.id, 'won:', won);
     
     // Update user stats
-    const statsRes = await fetch(`http://localhost:3103/users/${user.id}/stats`, {
+    const statsRes = await fetch(`${USERS_API_URL}/users/${user.id}/stats`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify({ won, experience_gained: won ? 50 : 20 })
     });
     
@@ -125,11 +167,12 @@ function getGameSettings(mode: string): GameSettings {
 function showMessage(winner: string, message: string) {
   const mssg = document.getElementById('mssg');
   if (!mssg) return;
+  const safeWinner = escapeHtml(winner);
   mssg.innerHTML = `
     <div class="fixed bottom-6 left-1/2 transform -translate-x-1/2 backdrop-blur-md 
       bg-black/70 border border-purple-700 text-cyan-300 text-lg px-8 py-3 rounded-xl shadow-xl 
       animate-pulse">
-      🏆 <span class="font-bold text-white">${winner}</span> ${message}
+      🏆 <span class="font-bold text-white">${safeWinner}</span> ${message}
     </div>`;
 }
 
@@ -156,10 +199,11 @@ export async function renderGamePage( mode : string , queueOverride?: string[], 
     const winner = queue[0] || 'No one';
     const topPlayer = Object.entries(playerScores).sort((a, b) => b[1] - a[1])[0];
     const finalWinner = topPlayer ? topPlayer[0] : winner;
+    const safeFinalWinner = escapeHtml(finalWinner);
     app.innerHTML = `
       <div class="flex flex-col justify-center items-center h-screen text-white bg-gradient-to-br from-black via-purple-900 to-blue-900">
         <h1 class="text-5xl font-extrabold mb-6 text-cyan-400 drop-shadow-lg animate-pulse">${t('tournamentFinished')}</h1>
-        <h2 class="text-3xl text-purple-300 mb-4">${t('champion')}: <span class="text-white">${finalWinner}</span></h2>
+        <h2 class="text-3xl text-purple-300 mb-4">${t('champion')}: <span class="text-white">${safeFinalWinner}</span></h2>
         ${
           topPlayer
             ? `<p class="text-lg text-gray-300 mb-6">${t('totalWins')}: <span class="text-cyan-300 font-semibold">${topPlayer[1]}</span></p>`
@@ -177,11 +221,12 @@ export async function renderGamePage( mode : string , queueOverride?: string[], 
   //// single mode or profile mode - game complete
   else if(queue.length < 2 && ("multiMode" != mode)){
     const winner = queue[0] || 'No one';
+    const safeWinner = escapeHtml(winner);
     
     app.innerHTML = `
       <div class="flex flex-col justify-center items-center h-screen text-white bg-gradient-to-br from-black via-purple-900 to-blue-900">
         <h1 class="text-5xl font-extrabold mb-6 text-cyan-400 drop-shadow-lg animate-pulse">${t('gameComplete')}</h1>
-        <h2 class="text-3xl text-purple-300 mb-4">${t('winner')}: <span class="text-white">${winner}</span></h2>
+        <h2 class="text-3xl text-purple-300 mb-4">${t('winner')}: <span class="text-white">${safeWinner}</span></h2>
         ${user && isAuthenticatedPlay ? `
           <p class="text-lg text-gray-300 mb-6">${t('statsUpdated')}</p>
           <div class="bg-white/10 backdrop-blur-xl border border-white/20 rounded-xl p-6 mb-6">
