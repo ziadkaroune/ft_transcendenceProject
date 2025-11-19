@@ -132,7 +132,7 @@ export function renderRegistrationPage() {
             </button>
           </div>
 
-          <div class="flex gap-4">
+          <div class="flex gap-4 max-md:flex-col">
             <button id="startGame" 
               class="flex-1 py-3 bg-purple-500 hover:bg-purple-700 rounded-lg font-bold shadow-md transition">
               ${t('startTournament')}
