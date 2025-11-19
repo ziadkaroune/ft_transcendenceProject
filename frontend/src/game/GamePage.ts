@@ -91,6 +91,7 @@ async function saveMatch(winner: string, p1: string, p2: string) {
     const statsRes = await fetch(`http://localhost:3103/users/${user.id}/stats`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify({ won, experience_gained: won ? 50 : 20 })
     });
     
