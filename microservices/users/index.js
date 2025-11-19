@@ -1015,8 +1015,7 @@ fastify.post('/users/:id/avatar', async (request, reply) => {
       return reply.code(400).send({ error: 'Unsupported file type. Please upload an image.' });
     }
 
-    const safeName = data.filename.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-    const filename = `user_${id}_${Date.now()}_${safeName}`;
+    const filename = `user_${id}_${Date.now()}.${data.mimetype.split('/')[1]}`;
     const destPath = path.join(avatarsDir, filename);
 
     const writeStream = fs.createWriteStream(destPath);

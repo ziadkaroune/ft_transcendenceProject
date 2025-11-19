@@ -17,8 +17,10 @@ docker volume rm $(docker volume ls -q) 2>/dev/null || true
 # System prune
 docker system prune -af --volumes
 
+# Remove database
+rm -rf ./database
+
 echo "✅ Complete reset done!"
 echo ""
 echo "Now rebuild:"
-echo "  docker-compose build --no-cache"
-echo "  docker-compose up -d"
+echo "sudo docker-compose up"
